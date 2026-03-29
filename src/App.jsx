@@ -559,20 +559,44 @@ function NotesView({ proj, notes, user, users }) {
     return { url, path };
   };
 
+  // Compress image to max 1600px and JPEG quality 0.7 to stay under Firebase limits
+  const compressImage = (file) => {
+    return new Promise((resolve) => {
+      const maxSize = 1600;
+      const img = new Image();
+      img.onload = () => {
+        let w = img.width, h = img.height;
+        if (w > maxSize || h > maxSize) {
+          if (w > h) { h = Math.round(h * maxSize / w); w = maxSize; }
+          else { w = Math.round(w * maxSize / h); h = maxSize; }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        canvas.toBlob((blob) => {
+          resolve(new File([blob], file.name || "photo.jpg", { type: "image/jpeg" }));
+        }, "image/jpeg", 0.7);
+      };
+      img.onerror = () => resolve(file); // fallback to original if compression fails
+      img.src = URL.createObjectURL(file);
+    });
+  };
+
   const addNote = async (type, content, nt = "") => {
     await addToCollection("notes", { projectId: proj.id, userId: user.uid, userName: user.name, type, content, noteText: nt });
     await addToCollection("notifications", { message: `${user.name} añadió ${type === "text" ? "una nota" : type === "audio" ? "nota de voz" : "una imagen"} en ${proj.name}`, projectId: proj.id, read: false });
   };
 
   const handleFile = async (e) => {
-    console.log("handleFile triggered", e.target.files);
     const file = e.target.files?.[0];
-    if (!file) { console.log("No file selected"); return; }
-    console.log("Uploading file:", file.name, file.size, file.type);
+    if (!file) return;
     setUploading(true);
     try {
-      const { url } = await uploadFile(file, "images");
-      console.log("Upload complete, URL:", url);
+      // Compress image before uploading
+      const compressed = await compressImage(file);
+      console.log("Original:", (file.size/1024/1024).toFixed(1)+"MB", "→ Compressed:", (compressed.size/1024/1024).toFixed(1)+"MB");
+      const { url } = await uploadFile(compressed, "images");
       await addNote("image", url, cap.trim());
       setCap("");
     } catch (err) { alert("Error al subir imagen: " + err.message); console.error("Upload error:", err); }
