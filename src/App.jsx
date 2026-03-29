@@ -55,17 +55,18 @@ const COLORS = [
 function useCollection(collName) {
   const [docs, setDocs] = useState([]);
   useEffect(() => {
-    const q = collection(db, collName);
-    const unsub = onSnapshot(q, snap => {
+    const colRef = collection(db, collName);
+    const unsub = onSnapshot(colRef, snap => {
       const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      // Sort client-side by createdAt descending
       items.sort((a, b) => {
         const ta = a.createdAt?.seconds || 0;
         const tb = b.createdAt?.seconds || 0;
         return tb - ta;
       });
       setDocs(items);
-    }, err => console.error(collName, err));
+    }, err => {
+      console.error("Firestore error on", collName, ":", err.message);
+    });
     return unsub;
   }, [collName]);
   return docs;
@@ -248,11 +249,7 @@ function Home({ projects, tasks, shoppingLists, notes, isA, go, user, users }) {
   const urgent = [...urgTasks.slice(0, 4), ...urgLists.slice(0, 2)].sort((a, b) => a._sd.localeCompare(b._sd)).slice(0, 5);
   const isOv = d => d && d < today(); const isTo = d => d === today();
 
-  const active = projects.filter(p => {
-    const tc = tasks.filter(t => t.projectId === p.id).length;
-    const dc = tasks.filter(t => t.projectId === p.id && t.completed).length;
-    return tc === 0 || dc < tc;
-  });
+  const active = projects; // Show all projects
 
   const createProject = async () => {
     if (!f.name.trim()) return;
