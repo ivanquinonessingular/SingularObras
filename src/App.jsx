@@ -547,6 +547,8 @@ function NotesView({ proj, notes, user, users }) {
   const [text, setText] = useState(""); const [cap, setCap] = useState(""); const [rec, setRec] = useState(false);
   const [uploading, setUploading] = useState(false);
   const mR = useRef(null); const cR = useRef([]);
+  const camRef = useRef(null);
+  const galRef = useRef(null);
   const sorted = [...notes].sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
 
   const uploadFile = async (file, folder) => {
@@ -562,7 +564,7 @@ function NotesView({ proj, notes, user, users }) {
     await addToCollection("notifications", { message: `${user.name} añadió ${type === "text" ? "una nota" : type === "audio" ? "nota de voz" : "una imagen"} en ${proj.name}`, projectId: proj.id, read: false });
   };
 
-  const onImg = async (e) => {
+  const handleFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploading(true);
@@ -621,8 +623,10 @@ function NotesView({ proj, notes, user, users }) {
           <button style={{ ...S.btnG, ...(rec ? { background: "#E85D5D", color: "#fff", borderColor: "#E85D5D" } : {}) }} onClick={rec ? () => { mR.current?.stop(); setRec(false); } : startRec} disabled={uploading}><Ic d={P.mic} size={14} />{rec ? " Parar" : " Voz"}</button>
           <div style={{ display: "flex", gap: 6, flex: 1, minWidth: 160, alignItems: "center" }}>
             <input style={{ ...S.inp, flex: 1 }} placeholder="Nota para imagen..." value={cap} onChange={e => setCap(e.target.value)} />
-            <label style={{ ...S.btnG, opacity: uploading ? .5 : 1 }}><Ic d={P.cam} size={13} /> Cámara<input type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={onImg} disabled={uploading} /></label>
-            <label style={{ ...S.btnG, opacity: uploading ? .5 : 1 }}><Ic d={P.img} size={13} /> Galería<input type="file" accept="image/*" style={{ display: "none" }} onChange={onImg} disabled={uploading} /></label>
+            <input ref={camRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={handleFile} />
+            <input ref={galRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleFile} />
+            <button style={{ ...S.btnG, opacity: uploading ? .5 : 1 }} onClick={() => !uploading && camRef.current?.click()} disabled={uploading}><Ic d={P.cam} size={13} /> Cámara</button>
+            <button style={{ ...S.btnG, opacity: uploading ? .5 : 1 }} onClick={() => !uploading && galRef.current?.click()} disabled={uploading}><Ic d={P.img} size={13} /> Galería</button>
           </div>
         </div>
         {uploading && <div style={{ fontSize: 12, color: "#E8853A", fontWeight: 600 }}>Subiendo archivo...</div>}
