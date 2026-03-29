@@ -1,0 +1,16 @@
+{
+  "name": "Singular",
+  "short_name": "Singular",
+  "description": "Gestión de obras y equipos",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F2F2F7",
+  "theme_color": "#E8853A",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    }
+  ]
+}
