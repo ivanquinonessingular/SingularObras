@@ -565,14 +565,17 @@ function NotesView({ proj, notes, user, users }) {
   };
 
   const handleFile = async (e) => {
+    console.log("handleFile triggered", e.target.files);
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file) { console.log("No file selected"); return; }
+    console.log("Uploading file:", file.name, file.size, file.type);
     setUploading(true);
     try {
-      const { url, path } = await uploadFile(file, "images");
+      const { url } = await uploadFile(file, "images");
+      console.log("Upload complete, URL:", url);
       await addNote("image", url, cap.trim());
       setCap("");
-    } catch (err) { alert("Error al subir imagen"); console.error(err); }
+    } catch (err) { alert("Error al subir imagen: " + err.message); console.error("Upload error:", err); }
     setUploading(false);
     e.target.value = "";
   };
@@ -580,15 +583,20 @@ function NotesView({ proj, notes, user, users }) {
   const startRec = async () => {
     try {
       const s = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const r = new MediaRecorder(s);
+      // Use mp4 for Safari compatibility, fallback to webm
+      const mimeType = MediaRecorder.isTypeSupported("audio/mp4") ? "audio/mp4" : 
+                       MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : 
+                       "audio/webm";
+      const ext = mimeType.includes("mp4") ? "m4a" : "webm";
+      const r = new MediaRecorder(s, { mimeType });
       mR.current = r; cR.current = [];
       r.ondataavailable = e => { if (e.data.size > 0) cR.current.push(e.data); };
       r.onstop = async () => {
-        const blob = new Blob(cR.current, { type: "audio/webm" });
+        const blob = new Blob(cR.current, { type: mimeType });
         s.getTracks().forEach(t => t.stop());
         setUploading(true);
         try {
-          const file = new File([blob], "audio.webm", { type: "audio/webm" });
+          const file = new File([blob], `audio.${ext}`, { type: mimeType });
           const { url } = await uploadFile(file, "audio");
           await addNote("audio", url);
         } catch (err) { alert("Error al subir audio"); console.error(err); }
@@ -625,8 +633,8 @@ function NotesView({ proj, notes, user, users }) {
             <input style={{ ...S.inp, flex: 1 }} placeholder="Nota para imagen..." value={cap} onChange={e => setCap(e.target.value)} />
             <input ref={camRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={handleFile} />
             <input ref={galRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleFile} />
-            <button style={{ ...S.btnG, opacity: uploading ? .5 : 1 }} onClick={() => !uploading && camRef.current?.click()} disabled={uploading}><Ic d={P.cam} size={13} /> Cámara</button>
-            <button style={{ ...S.btnG, opacity: uploading ? .5 : 1 }} onClick={() => !uploading && galRef.current?.click()} disabled={uploading}><Ic d={P.img} size={13} /> Galería</button>
+            <button style={{ ...S.btnG, opacity: uploading ? .5 : 1 }} onClick={() => { if (!uploading && camRef.current) { camRef.current.value = ""; camRef.current.click(); }}} disabled={uploading}><Ic d={P.cam} size={13} /> Cámara</button>
+            <button style={{ ...S.btnG, opacity: uploading ? .5 : 1 }} onClick={() => { if (!uploading && galRef.current) { galRef.current.value = ""; galRef.current.click(); }}} disabled={uploading}><Ic d={P.img} size={13} /> Galería</button>
           </div>
         </div>
         {uploading && <div style={{ fontSize: 12, color: "#E8853A", fontWeight: 600 }}>Subiendo archivo...</div>}
