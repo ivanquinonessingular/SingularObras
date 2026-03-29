@@ -52,9 +52,10 @@ const COLORS = [
 ];
 
 /* ═══════ useFirestore hook — real-time collection listener ═══════ */
-function useCollection(collName) {
+function useCollection(collName, enabled = true) {
   const [docs, setDocs] = useState([]);
   useEffect(() => {
+    if (!enabled) return;
     const colRef = collection(db, collName);
     const unsub = onSnapshot(colRef, snap => {
       const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -68,7 +69,7 @@ function useCollection(collName) {
       console.error("Firestore error on", collName, ":", err.message);
     });
     return unsub;
-  }, [collName]);
+  }, [collName, enabled]);
   return docs;
 }
 
@@ -111,14 +112,15 @@ export default function App() {
     return unsub;
   }, []);
 
-  // Real-time collections
-  const projects = useCollection("projects");
-  const tasks = useCollection("tasks");
-  const shoppingLists = useCollection("shoppingLists");
-  const notes = useCollection("notes");
-  const notifications = useCollection("notifications");
-  const plans = useCollection("plans");
-  const users = useCollection("users");
+  // Real-time collections — only listen when authenticated
+  const loggedIn = !!user;
+  const projects = useCollection("projects", loggedIn);
+  const tasks = useCollection("tasks", loggedIn);
+  const shoppingLists = useCollection("shoppingLists", loggedIn);
+  const notes = useCollection("notes", loggedIn);
+  const notifications = useCollection("notifications", loggedIn);
+  const plans = useCollection("plans", loggedIn);
+  const users = useCollection("users", loggedIn);
 
   if (authLoading) return <div style={S.loadWrap}><div style={S.loadIcon}>S</div><p style={{color:"#888",marginTop:10}}>Cargando...</p></div>;
   if (!user) return <Login />;
