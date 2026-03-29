@@ -6,7 +6,7 @@ import {
 } from "firebase/auth";
 import {
   collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot,
-  query, orderBy, serverTimestamp, setDoc, getDoc
+  serverTimestamp, setDoc, getDoc
 } from "firebase/firestore";
 import {
   ref as storageRef, uploadBytes, getDownloadURL, deleteObject
@@ -55,9 +55,16 @@ const COLORS = [
 function useCollection(collName) {
   const [docs, setDocs] = useState([]);
   useEffect(() => {
-    const q = query(collection(db, collName), orderBy("createdAt", "desc"));
+    const q = collection(db, collName);
     const unsub = onSnapshot(q, snap => {
-      setDocs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      // Sort client-side by createdAt descending
+      items.sort((a, b) => {
+        const ta = a.createdAt?.seconds || 0;
+        const tb = b.createdAt?.seconds || 0;
+        return tb - ta;
+      });
+      setDocs(items);
     }, err => console.error(collName, err));
     return unsub;
   }, [collName]);
@@ -539,29 +546,87 @@ function ShopView({ proj, lists, isA }) {
 /* ═══ NOTES ═══ */
 function NotesView({ proj, notes, user, users }) {
   const [text, setText] = useState(""); const [cap, setCap] = useState(""); const [rec, setRec] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const mR = useRef(null); const cR = useRef([]);
   const sorted = [...notes].sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
 
-  const add = async (type, content, nt = "") => {
+  const uploadFile = async (file, folder) => {
+    const path = `notes/${proj.id}/${folder}/${uid()}_${file.name || "file"}`;
+    const sRef = storageRef(storage, path);
+    await uploadBytes(sRef, file);
+    const url = await getDownloadURL(sRef);
+    return { url, path };
+  };
+
+  const addNote = async (type, content, nt = "") => {
     await addToCollection("notes", { projectId: proj.id, userId: user.uid, userName: user.name, type, content, noteText: nt });
     await addToCollection("notifications", { message: `${user.name} añadió ${type === "text" ? "una nota" : type === "audio" ? "nota de voz" : "una imagen"} en ${proj.name}`, projectId: proj.id, read: false });
   };
-  const onImg = e => { const file = e.target.files?.[0]; if (!file) return; const r = new FileReader(); r.onload = ev => { add("image", ev.target.result, cap.trim()); setCap(""); }; r.readAsDataURL(file); e.target.value = ""; };
-  const startRec = async () => { try { const s = await navigator.mediaDevices.getUserMedia({ audio: true }); const r = new MediaRecorder(s); mR.current = r; cR.current = []; r.ondataavailable = e => { if (e.data.size > 0) cR.current.push(e.data); }; r.onstop = () => { const b = new Blob(cR.current, { type: "audio/webm" }); const rd = new FileReader(); rd.onload = ev => add("audio", ev.target.result); rd.readAsDataURL(b); s.getTracks().forEach(t => t.stop()); }; r.start(); setRec(true); } catch { alert("Micrófono no disponible"); } };
+
+  const onImg = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const { url, path } = await uploadFile(file, "images");
+      await addNote("image", url, cap.trim());
+      setCap("");
+    } catch (err) { alert("Error al subir imagen"); console.error(err); }
+    setUploading(false);
+    e.target.value = "";
+  };
+
+  const startRec = async () => {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const r = new MediaRecorder(s);
+      mR.current = r; cR.current = [];
+      r.ondataavailable = e => { if (e.data.size > 0) cR.current.push(e.data); };
+      r.onstop = async () => {
+        const blob = new Blob(cR.current, { type: "audio/webm" });
+        s.getTracks().forEach(t => t.stop());
+        setUploading(true);
+        try {
+          const file = new File([blob], "audio.webm", { type: "audio/webm" });
+          const { url } = await uploadFile(file, "audio");
+          await addNote("audio", url);
+        } catch (err) { alert("Error al subir audio"); console.error(err); }
+        setUploading(false);
+      };
+      r.start();
+      setRec(true);
+    } catch { alert("Micrófono no disponible"); }
+  };
+
+  const deleteNote = async (note) => {
+    // Try to delete the file from Storage if it's a URL
+    if (note.type !== "text" && note.content?.startsWith("http")) {
+      try {
+        // Extract the storage path from the URL
+        const pathMatch = note.content.match(/o\/(.+?)\?/);
+        if (pathMatch) {
+          const path = decodeURIComponent(pathMatch[1]);
+          await deleteObject(storageRef(storage, path));
+        }
+      } catch {}
+    }
+    await deleteFromCollection("notes", note.id);
+  };
 
   return (
     <div>
       <div style={S.formCard}>
-        <textarea style={{ ...S.inp, minHeight: 40, resize: "vertical" }} placeholder="Escribe una nota..." value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (text.trim()) { add("text", text.trim()); setText(""); } } }} />
+        <textarea style={{ ...S.inp, minHeight: 40, resize: "vertical" }} placeholder="Escribe una nota..." value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (text.trim()) { addNote("text", text.trim()); setText(""); } } }} />
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <button style={S.btnP} onClick={() => { if (text.trim()) { add("text", text.trim()); setText(""); } }} disabled={!text.trim()}>Enviar</button>
-          <button style={{ ...S.btnG, ...(rec ? { background: "#E85D5D", color: "#fff", borderColor: "#E85D5D" } : {}) }} onClick={rec ? () => { mR.current?.stop(); setRec(false); } : startRec}><Ic d={P.mic} size={14} />{rec ? " Parar" : " Voz"}</button>
+          <button style={S.btnP} onClick={() => { if (text.trim()) { addNote("text", text.trim()); setText(""); } }} disabled={!text.trim()}>Enviar</button>
+          <button style={{ ...S.btnG, ...(rec ? { background: "#E85D5D", color: "#fff", borderColor: "#E85D5D" } : {}) }} onClick={rec ? () => { mR.current?.stop(); setRec(false); } : startRec} disabled={uploading}><Ic d={P.mic} size={14} />{rec ? " Parar" : " Voz"}</button>
           <div style={{ display: "flex", gap: 6, flex: 1, minWidth: 160, alignItems: "center" }}>
             <input style={{ ...S.inp, flex: 1 }} placeholder="Nota para imagen..." value={cap} onChange={e => setCap(e.target.value)} />
-            <label style={S.btnG}><Ic d={P.cam} size={13} /> Cámara<input type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={onImg} /></label>
-            <label style={S.btnG}><Ic d={P.img} size={13} /> Galería<input type="file" accept="image/*" style={{ display: "none" }} onChange={onImg} /></label>
+            <label style={{ ...S.btnG, opacity: uploading ? .5 : 1 }}><Ic d={P.cam} size={13} /> Cámara<input type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={onImg} disabled={uploading} /></label>
+            <label style={{ ...S.btnG, opacity: uploading ? .5 : 1 }}><Ic d={P.img} size={13} /> Galería<input type="file" accept="image/*" style={{ display: "none" }} onChange={onImg} disabled={uploading} /></label>
           </div>
         </div>
+        {uploading && <div style={{ fontSize: 12, color: "#E8853A", fontWeight: 600 }}>Subiendo archivo...</div>}
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 12 }}>
         {sorted.map(note => {
@@ -572,7 +637,7 @@ function NotesView({ proj, notes, user, users }) {
                 <div style={{ width: 6, height: 6, borderRadius: "50%", background: u?.color || "#ccc" }} />
                 <span style={{ fontWeight: 700, fontSize: 12, color: "#333" }}>{note.userName || "?"}</span>
                 <span style={{ fontSize: 11, color: "#bbb" }}>{note.createdAt ? fmtDT(note.createdAt.toDate?.().toISOString() || "") : ""}</span>
-                <button style={{ ...S.iconBtn, marginLeft: "auto" }} onClick={() => deleteFromCollection("notes", note.id)}><Ic d={P.trash} size={12} color="#ccc" /></button>
+                <button style={{ ...S.iconBtn, marginLeft: "auto" }} onClick={() => deleteNote(note)}><Ic d={P.trash} size={12} color="#ccc" /></button>
               </div>
               <div style={{ padding: "10px 14px" }}>
                 {note.type === "text" && <p style={{ margin: 0, color: "#444", fontSize: 14, lineHeight: 1.6 }}>{note.content}</p>}
