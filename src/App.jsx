@@ -667,23 +667,67 @@ function NotesView({ proj, notes, user, users }) {
         {sorted.map(note => {
           const u = users.find(x => x.id === note.userId);
           return (
-            <div key={note.id} style={{ ...S.formCard, padding: 0, overflow: "hidden" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "10px 14px", borderBottom: "1px solid #eee" }}>
-                <div style={{ width: 6, height: 6, borderRadius: "50%", background: u?.color || "#ccc" }} />
-                <span style={{ fontWeight: 700, fontSize: 12, color: "#333" }}>{note.userName || "?"}</span>
-                <span style={{ fontSize: 11, color: "#bbb" }}>{note.createdAt ? fmtDT(note.createdAt.toDate?.().toISOString() || "") : ""}</span>
-                <button style={{ ...S.iconBtn, marginLeft: "auto" }} onClick={() => deleteNote(note)}><Ic d={P.trash} size={12} color="#ccc" /></button>
-              </div>
-              <div style={{ padding: "10px 14px" }}>
-                {note.type === "text" && <p style={{ margin: 0, color: "#444", fontSize: 14, lineHeight: 1.6 }}>{note.content}</p>}
-                {note.type === "audio" && <audio controls src={note.content} style={{ width: "100%", maxWidth: 320 }} />}
-                {note.type === "image" && <div><img src={note.content} alt="" style={{ maxWidth: "100%", maxHeight: 300, borderRadius: 12 }} />{note.noteText && <p style={{ margin: "6px 0 0", color: "#888", fontSize: 13, fontStyle: "italic" }}>{note.noteText}</p>}</div>}
-              </div>
-            </div>
+            <NoteCard key={note.id} note={note} user={u} onDelete={() => deleteNote(note)} />
           );
         })}
       </div>
       {sorted.length === 0 && <div style={S.empty}><Ic d={P.note} size={44} color="#ddd" /><p style={{ color: "#aaa", marginTop: 10 }}>Añade notas, voz o imágenes</p></div>}
+    </div>
+  );
+}
+
+/* ═══ NOTE CARD (with editable comment for images) ═══ */
+function NoteCard({ note, user, onDelete }) {
+  const [editing, setEditing] = useState(false);
+  const [comment, setComment] = useState(note.noteText || "");
+
+  const saveComment = async () => {
+    await updateInCollection("notes", note.id, { noteText: comment.trim() });
+    setEditing(false);
+  };
+
+  return (
+    <div style={{ ...S.formCard, padding: 0, overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "10px 14px", borderBottom: "1px solid #eee" }}>
+        <div style={{ width: 6, height: 6, borderRadius: "50%", background: user?.color || "#ccc" }} />
+        <span style={{ fontWeight: 700, fontSize: 12, color: "#333" }}>{note.userName || "?"}</span>
+        <span style={{ fontSize: 11, color: "#bbb" }}>{note.createdAt ? fmtDT(note.createdAt.toDate?.().toISOString() || "") : ""}</span>
+        <button style={{ ...S.iconBtn, marginLeft: "auto" }} onClick={onDelete}><Ic d={P.trash} size={12} color="#ccc" /></button>
+      </div>
+      <div style={{ padding: "10px 14px" }}>
+        {note.type === "text" && <p style={{ margin: 0, color: "#444", fontSize: 14, lineHeight: 1.6 }}>{note.content}</p>}
+        {note.type === "audio" && <audio controls src={note.content} style={{ width: "100%", maxWidth: 320 }} />}
+        {note.type === "image" && (
+          <div>
+            <img src={note.content} alt="" style={{ maxWidth: "100%", maxHeight: 300, borderRadius: 12 }} />
+            {editing ? (
+              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                <input
+                  style={{ ...S.inp, flex: 1, borderColor: "#E8853A" }}
+                  value={comment}
+                  onChange={e => setComment(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") saveComment(); if (e.key === "Escape") setEditing(false); }}
+                  placeholder="Escribe un comentario..."
+                  autoFocus
+                />
+                <button style={{ ...S.btnP, padding: "6px 14px" }} onClick={saveComment}>Ok</button>
+                <button style={S.iconBtn} onClick={() => { setComment(note.noteText || ""); setEditing(false); }}><Ic d={P.x} size={14} color="#ccc" /></button>
+              </div>
+            ) : (
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 6, marginTop: 6 }}>
+                {note.noteText ? (
+                  <p style={{ margin: 0, color: "#555", fontSize: 13, fontStyle: "italic", flex: 1 }}>{note.noteText}</p>
+                ) : (
+                  <span style={{ color: "#bbb", fontSize: 12, flex: 1 }}>Sin comentario</span>
+                )}
+                <button style={S.iconBtn} onClick={() => { setComment(note.noteText || ""); setEditing(true); }}>
+                  <Ic d={P.edit} size={13} color="#ccc" />
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
