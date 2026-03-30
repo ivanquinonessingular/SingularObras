@@ -154,7 +154,7 @@ export default function App() {
       <div style={S.content}>
         {view === "home" && <Home projects={projects} tasks={tasks} shoppingLists={shoppingLists} notes={notes} isA={isA} go={go} user={user} users={users} />}
         {view === "team" && isA && <TeamView users={users} />}
-        {view === "project" && proj && <ProjView proj={proj} tasks={tasks} shoppingLists={shoppingLists} notes={notes} plans={plans} isA={isA} user={user} tab={tab} setTab={setTab} users={users} />}
+        {view === "project" && proj && <ProjView proj={proj} tasks={tasks} shoppingLists={shoppingLists} notes={notes} plans={plans} isA={isA} user={user} tab={tab} setTab={setTab} users={users} goBack={() => setView("home")} />}
       </div>
 
       {view !== "project" && (
@@ -255,7 +255,7 @@ function Home({ projects, tasks, shoppingLists, notes, isA, go, user, users }) {
   const urgent = [...urgTasks.slice(0, 4), ...urgLists.slice(0, 2)].sort((a, b) => a._sd.localeCompare(b._sd)).slice(0, 5);
   const isOv = d => d && d < today(); const isTo = d => d === today();
 
-  const active = [...projects].sort((a, b) => {
+  const active = [...projects].filter(p => !p.finished).sort((a, b) => {
     // Find earliest pending task date for each project
     const aTaskDates = tasks.filter(t => t.projectId === a.id && !t.completed && t.date).map(t => t.date);
     const bTaskDates = tasks.filter(t => t.projectId === b.id && !t.completed && t.date).map(t => t.date);
@@ -271,11 +271,6 @@ function Home({ projects, tasks, shoppingLists, notes, isA, go, user, users }) {
     await addToCollection("projects", { name: f.name, description: f.description, color: f.color });
     setF({ name: "", description: "", color: "#E8853A" });
     setShowNew(false);
-  };
-
-  const deleteProject = async (pid) => {
-    await deleteFromCollection("projects", pid);
-    // Note: in production, you'd also delete related tasks/notes/etc with a Cloud Function
   };
 
   return (
@@ -329,7 +324,6 @@ function Home({ projects, tasks, shoppingLists, notes, isA, go, user, users }) {
           const pct = tc ? Math.round((dc / tc) * 100) : 0;
           return (
             <div key={p.id} style={{ ...S.projCard, background: color.bg }} onClick={() => go(p.id)}>
-              {isA && <button style={{ ...S.iconBtn, position: "absolute", top: 10, right: 10 }} onClick={e => { e.stopPropagation(); deleteProject(p.id); }}><Ic d={P.trash} size={14} color="rgba(255,255,255,.5)" /></button>}
               <div style={{ fontSize: 36, fontWeight: 900, color: "rgba(255,255,255,.2)", lineHeight: 1 }}>{pct}%</div>
               <div style={{ marginTop: "auto" }}>
                 <div style={{ fontWeight: 700, fontSize: 16, color: "#fff" }}>{p.name}</div>
@@ -496,12 +490,18 @@ function TeamView({ users }) {
 }
 
 /* ═══ PROJECT VIEW ═══ */
-function ProjView({ proj, tasks, shoppingLists, notes, plans, isA, user, tab, setTab, users }) {
+function ProjView({ proj, tasks, shoppingLists, notes, plans, isA, user, tab, setTab, users, goBack }) {
+  const [confirmFinish, setConfirmFinish] = useState(false);
   const tabs = [{ id: "tasks", label: "Tareas", icon: P.task }, { id: "shopping", label: "Compras", icon: P.cart }, { id: "notes", label: "Notas", icon: P.note }, { id: "plans", label: "Planos", icon: P.plan }];
   const projTasks = tasks.filter(t => t.projectId === proj.id);
   const projLists = shoppingLists.filter(s => s.projectId === proj.id);
   const projNotes = notes.filter(n => n.projectId === proj.id);
   const projPlans = plans.filter(p => p.projectId === proj.id);
+
+  const finishProject = async () => {
+    await updateInCollection("projects", proj.id, { finished: true, finishedAt: nowISO() });
+    goBack();
+  };
 
   return (
     <div>
@@ -510,6 +510,25 @@ function ProjView({ proj, tasks, shoppingLists, notes, plans, isA, user, tab, se
       {tab === "shopping" && <ShopView proj={proj} lists={projLists} isA={isA} />}
       {tab === "notes" && <NotesView proj={proj} notes={projNotes} user={user} users={users} />}
       {tab === "plans" && <PlansView proj={proj} plans={projPlans} isA={isA} />}
+
+      {isA && (
+        <div style={{ marginTop: 30, padding: "16px 0", borderTop: "1px solid #eee" }}>
+          {!confirmFinish ? (
+            <button style={{ ...S.btnG, width: "100%", justifyContent: "center", color: "#999" }} onClick={() => setConfirmFinish(true)}>
+              <Ic d={P.check} size={14} color="#999" /> Marcar proyecto como finalizado
+            </button>
+          ) : (
+            <div style={S.formCard}>
+              <p style={{ margin: "0 0 10px", fontSize: 14, color: "#555", textAlign: "center" }}>¿Seguro que quieres finalizar <strong>{proj.name}</strong>?</p>
+              <p style={{ margin: "0 0 12px", fontSize: 12, color: "#999", textAlign: "center" }}>El proyecto dejará de aparecer en la página principal. Esta acción se puede revertir desde Firebase.</p>
+              <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+                <button style={{ ...S.btnP, background: "#E85D5D" }} onClick={finishProject}>Sí, finalizar</button>
+                <button style={S.btnG} onClick={() => setConfirmFinish(false)}>Cancelar</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
