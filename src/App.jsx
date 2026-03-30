@@ -981,7 +981,7 @@ function NoteCard({ note, user, onDelete }) {
 
 /* ═══ PLANS ═══ */
 function PlansView({ proj, plans, isA }) {
-  const gIcon = n => { const ext = (n || "").split(".").pop().toLowerCase(); if (ext === "pdf") return { l: "PDF", c: "#E85D5D" }; if (["dwg", "dxf", "dwf"].includes(ext)) return { l: "CAD", c: "#E8853A" }; return { l: ext.toUpperCase(), c: "#8B6DC4" }; };
+  const gIcon = n => { const ext = (n || "").split(".").pop().toLowerCase(); if (ext === "pdf") return { l: "PDF", c: "#E85D5D" }; if (["dwg", "dxf", "dwf"].includes(ext)) return { l: "CAD", c: "#E8853A" }; if (["ai", "eps"].includes(ext)) return { l: "AI", c: "#FF9F0A" }; if (["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "tiff", "tif"].includes(ext)) return { l: "IMG", c: "#2BAA8E" }; return { l: ext.toUpperCase(), c: "#8B6DC4" }; };
   const fmtSz = b => b < 1024 ? b + " B" : b < 1048576 ? (b / 1024).toFixed(1) + " KB" : (b / 1048576).toFixed(1) + " MB";
 
   const upload = async (e) => {
@@ -1003,7 +1003,7 @@ function PlansView({ proj, plans, isA }) {
 
   return (
     <div>
-      {isA && <label style={{ ...S.btnP, marginBottom: 14, cursor: "pointer", display: "inline-flex" }}><Ic d={P.plus} size={14} /> Subir planos<input type="file" accept=".pdf,.dwg,.dxf,.dwf,.dws,.dgn" multiple style={{ display: "none" }} onChange={upload} /></label>}
+      {isA && <label style={{ ...S.btnP, marginBottom: 14, cursor: "pointer", display: "inline-flex" }}><Ic d={P.plus} size={14} /> Subir planos<input type="file" accept=".pdf,.dwg,.dxf,.dwf,.dws,.dgn,.ai,.eps,.svg,image/*" multiple style={{ display: "none" }} onChange={upload} /></label>}
       {plans.map(plan => {
         const fi = gIcon(plan.name);
         return (
