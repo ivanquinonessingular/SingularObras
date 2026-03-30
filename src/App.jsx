@@ -251,7 +251,16 @@ function Home({ projects, tasks, shoppingLists, notes, isA, go, user, users }) {
   const urgent = [...urgTasks.slice(0, 4), ...urgLists.slice(0, 2)].sort((a, b) => a._sd.localeCompare(b._sd)).slice(0, 5);
   const isOv = d => d && d < today(); const isTo = d => d === today();
 
-  const active = projects; // Show all projects
+  const active = [...projects].sort((a, b) => {
+    // Find earliest pending task date for each project
+    const aTaskDates = tasks.filter(t => t.projectId === a.id && !t.completed && t.date).map(t => t.date);
+    const bTaskDates = tasks.filter(t => t.projectId === b.id && !t.completed && t.date).map(t => t.date);
+    const aMin = aTaskDates.length > 0 ? aTaskDates.sort()[0] : "9999";
+    const bMin = bTaskDates.length > 0 ? bTaskDates.sort()[0] : "9999";
+    if (aMin !== bMin) return aMin.localeCompare(bMin);
+    // If same urgency, sort by most recent creation
+    return (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0);
+  });
 
   const createProject = async () => {
     if (!f.name.trim()) return;
@@ -544,7 +553,7 @@ function ShopView({ proj, lists, isA }) {
 
 /* ═══ NOTES ═══ */
 function NotesView({ proj, notes, user, users }) {
-  const [text, setText] = useState(""); const [cap, setCap] = useState(""); const [rec, setRec] = useState(false);
+  const [text, setText] = useState(""); const [rec, setRec] = useState(false);
   const [uploading, setUploading] = useState(false);
   const mR = useRef(null); const cR = useRef([]);
   const camRef = useRef(null);
@@ -597,8 +606,7 @@ function NotesView({ proj, notes, user, users }) {
       const compressed = await compressImage(file);
       console.log("Original:", (file.size/1024/1024).toFixed(1)+"MB", "→ Compressed:", (compressed.size/1024/1024).toFixed(1)+"MB");
       const { url } = await uploadFile(compressed, "images");
-      await addNote("image", url, cap.trim());
-      setCap("");
+      await addNote("image", url);
     } catch (err) { alert("Error al subir imagen: " + err.message); console.error("Upload error:", err); }
     setUploading(false);
     e.target.value = "";
@@ -653,8 +661,7 @@ function NotesView({ proj, notes, user, users }) {
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <button style={S.btnP} onClick={() => { if (text.trim()) { addNote("text", text.trim()); setText(""); } }} disabled={!text.trim()}>Enviar</button>
           <button style={{ ...S.btnG, ...(rec ? { background: "#E85D5D", color: "#fff", borderColor: "#E85D5D" } : {}) }} onClick={rec ? () => { mR.current?.stop(); setRec(false); } : startRec} disabled={uploading}><Ic d={P.mic} size={14} />{rec ? " Parar" : " Voz"}</button>
-          <div style={{ display: "flex", gap: 6, flex: 1, minWidth: 160, alignItems: "center" }}>
-            <input style={{ ...S.inp, flex: 1 }} placeholder="Nota para imagen..." value={cap} onChange={e => setCap(e.target.value)} />
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <input ref={camRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={handleFile} />
             <input ref={galRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleFile} />
             <button style={{ ...S.btnG, opacity: uploading ? .5 : 1 }} onClick={() => { if (!uploading && camRef.current) { camRef.current.value = ""; camRef.current.click(); }}} disabled={uploading}><Ic d={P.cam} size={13} /> Cámara</button>
@@ -680,6 +687,7 @@ function NotesView({ proj, notes, user, users }) {
 function NoteCard({ note, user, onDelete }) {
   const [editing, setEditing] = useState(false);
   const [comment, setComment] = useState(note.noteText || "");
+  const [fullscreen, setFullscreen] = useState(false);
 
   const saveComment = async () => {
     await updateInCollection("notes", note.id, { noteText: comment.trim() });
@@ -699,7 +707,11 @@ function NoteCard({ note, user, onDelete }) {
         {note.type === "audio" && <audio controls src={note.content} style={{ width: "100%", maxWidth: 320 }} />}
         {note.type === "image" && (
           <div>
-            <img src={note.content} alt="" style={{ maxWidth: "100%", maxHeight: 300, borderRadius: 12 }} />
+            <img
+              src={note.content} alt=""
+              style={{ maxWidth: "100%", maxHeight: 300, borderRadius: 12, cursor: "pointer" }}
+              onClick={() => setFullscreen(true)}
+            />
             {editing ? (
               <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
                 <input
@@ -728,6 +740,63 @@ function NoteCard({ note, user, onDelete }) {
           </div>
         )}
       </div>
+
+      {/* Fullscreen image viewer */}
+      {fullscreen && (
+        <div
+          style={{
+            position: "fixed", inset: 0, zIndex: 9999,
+            background: "rgba(0,0,0,.92)",
+            display: "flex", flexDirection: "column",
+            alignItems: "center", justifyContent: "center",
+          }}
+          onClick={() => setFullscreen(false)}
+        >
+          <button
+            style={{
+              position: "absolute", top: 16, right: 16,
+              width: 40, height: 40, borderRadius: 20,
+              background: "rgba(255,255,255,.15)", border: "none",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              cursor: "pointer", zIndex: 10000
+            }}
+            onClick={() => setFullscreen(false)}
+          >
+            <Ic d={P.x} size={22} color="#fff" />
+          </button>
+          <div
+            style={{
+              width: "100%", height: "100%",
+              overflow: "auto", WebkitOverflowScrolling: "touch",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              padding: 16
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <img
+              src={note.content} alt=""
+              style={{
+                maxWidth: "none", maxHeight: "none",
+                width: "auto", height: "auto",
+                minWidth: "100%",
+                objectFit: "contain",
+                borderRadius: 4,
+                touchAction: "pinch-zoom",
+              }}
+            />
+          </div>
+          {note.noteText && (
+            <div style={{
+              position: "absolute", bottom: 20, left: 20, right: 20,
+              background: "rgba(0,0,0,.6)", borderRadius: 12,
+              padding: "10px 16px", color: "#fff", fontSize: 14,
+              fontStyle: "italic", textAlign: "center"
+            }}>
+              {note.noteText}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
