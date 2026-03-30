@@ -242,6 +242,7 @@ function Login() {
 /* ═══ HOME ═══ */
 function Home({ projects, tasks, shoppingLists, notes, isA, go, user, users }) {
   const [showNew, setShowNew] = useState(false);
+  const [showCal, setShowCal] = useState(false);
   const [f, setF] = useState({ name: "", description: "", color: "#E8853A" });
 
   const allT = tasks.filter(t => !t.completed);
@@ -284,7 +285,7 @@ function Home({ projects, tasks, shoppingLists, notes, isA, go, user, users }) {
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
             <Ic d={P.alert} size={18} color="#E8853A" />
             <span style={{ fontWeight: 700, fontSize: 15, color: "#333" }}>Pendiente</span>
-            <span style={{ fontSize: 12, color: "#999", marginLeft: "auto" }}>{urgent.length}</span>
+            <button style={{ ...S.calBtn, marginLeft: "auto" }} onClick={() => setShowCal(true)}><Ic d={P.cal} size={16} color="#E8853A" /></button>
           </div>
           {urgent.map(item => (
             <div key={item.id} style={S.urgentItem} onClick={() => go(item.projectId, item._type === "task" ? "tasks" : "shopping")}>
@@ -340,6 +341,139 @@ function Home({ projects, tasks, shoppingLists, notes, isA, go, user, users }) {
         })}
       </div>
       {active.length === 0 && !showNew && <div style={S.empty}><Ic d={P.folder} size={48} color="#ddd" /><p style={{ color: "#aaa", marginTop: 12 }}>Crea tu primer proyecto</p></div>}
+
+      {/* Calendar modal */}
+      {showCal && <CalendarView tasks={tasks} projects={projects} users={users} isA={isA} user={user} go={go} onClose={() => setShowCal(false)} />}
+    </div>
+  );
+}
+
+/* ═══ CALENDAR VIEW ═══ */
+function CalendarView({ tasks, projects, users, isA, user, go, onClose }) {
+  const [month, setMonth] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
+  const [selDay, setSelDay] = useState(null);
+
+  const myTasks = isA ? tasks : tasks.filter(t => {
+    const ids = t.assigneeIds || (t.assigneeId ? [t.assigneeId] : []);
+    return ids.includes(user.uid);
+  });
+
+  const year = month.getFullYear();
+  const mo = month.getMonth();
+  const daysInMonth = new Date(year, mo + 1, 0).getDate();
+  const firstDow = (new Date(year, mo, 1).getDay() + 6) % 7; // Monday = 0
+  const monthNames = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const dayNames = ["L","M","X","J","V","S","D"];
+
+  const prevMonth = () => setMonth(new Date(year, mo - 1, 1));
+  const nextMonth = () => setMonth(new Date(year, mo + 1, 1));
+
+  // Group tasks by date string
+  const tasksByDate = {};
+  myTasks.forEach(t => {
+    if (t.date) {
+      if (!tasksByDate[t.date]) tasksByDate[t.date] = [];
+      tasksByDate[t.date].push(t);
+    }
+  });
+
+  const toDateStr = (day) => `${year}-${String(mo + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const isToday2 = (day) => toDateStr(day) === today();
+
+  const selDateStr = selDay ? toDateStr(selDay) : null;
+  const selTasks = selDateStr ? (tasksByDate[selDateStr] || []) : [];
+
+  const getAssignees = (task) => {
+    const ids = task.assigneeIds || (task.assigneeId ? [task.assigneeId] : []);
+    return ids.map(id => users.find(u => u.id === id)).filter(Boolean);
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,.4)", display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={onClose}>
+      <div style={{ background: "#fff", borderRadius: "24px 24px 0 0", width: "100%", maxWidth: 500, maxHeight: "90vh", overflow: "hidden", display: "flex", flexDirection: "column" }} onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 20px 10px" }}>
+          <button style={S.iconBtn} onClick={prevMonth}><Ic d={P.back} size={20} color="#333" /></button>
+          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "#333" }}>{monthNames[mo]} {year}</h2>
+          <button style={S.iconBtn} onClick={nextMonth}><Ic d={P.back} size={20} color="#333" style={{ transform: "rotate(180deg)" }} /></button>
+        </div>
+
+        {/* Day names */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", padding: "4px 12px", gap: 0 }}>
+          {dayNames.map(d => <div key={d} style={{ textAlign: "center", fontSize: 11, fontWeight: 700, color: "#bbb", padding: "4px 0" }}>{d}</div>)}
+        </div>
+
+        {/* Calendar grid */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", padding: "0 12px 8px", gap: 2 }}>
+          {Array.from({ length: firstDow }, (_, i) => <div key={`e${i}`} />)}
+          {Array.from({ length: daysInMonth }, (_, i) => {
+            const day = i + 1;
+            const ds = toDateStr(day);
+            const dayTasks = tasksByDate[ds] || [];
+            const hasPending = dayTasks.some(t => !t.completed);
+            const allDone = dayTasks.length > 0 && dayTasks.every(t => t.completed);
+            const isSel = selDay === day;
+            const isTod = isToday2(day);
+            const isPast = ds < today() && hasPending;
+
+            return (
+              <div
+                key={day}
+                style={{
+                  textAlign: "center", padding: "6px 0", borderRadius: 12, cursor: "pointer",
+                  background: isSel ? "#1a1a2e" : isTod ? "#FFF3E8" : "transparent",
+                  color: isSel ? "#fff" : isTod ? "#E8853A" : "#333",
+                  fontWeight: isTod || isSel ? 800 : 500, fontSize: 14,
+                  transition: "all .15s", position: "relative",
+                }}
+                onClick={() => setSelDay(isSel ? null : day)}
+              >
+                {day}
+                {dayTasks.length > 0 && (
+                  <div style={{ display: "flex", justifyContent: "center", gap: 2, marginTop: 2 }}>
+                    {hasPending && <div style={{ width: 5, height: 5, borderRadius: "50%", background: isPast ? "#E85D5D" : "#E8853A" }} />}
+                    {allDone && <div style={{ width: 5, height: 5, borderRadius: "50%", background: "#2BAA8E" }} />}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Selected day tasks */}
+        <div style={{ flex: 1, overflowY: "auto", padding: "0 16px 20px", borderTop: "1px solid #eee" }}>
+          {selDay && (
+            <div style={{ paddingTop: 12 }}>
+              <h3 style={{ margin: "0 0 10px", fontSize: 15, fontWeight: 700, color: "#333" }}>{selDay} {monthNames[mo].slice(0, 3)}</h3>
+              {selTasks.length === 0 && <p style={{ color: "#bbb", fontSize: 13 }}>Sin tareas este día</p>}
+              {selTasks.map(task => {
+                const proj = projects.find(p => p.id === task.projectId);
+                const assignees = getAssignees(task);
+                return (
+                  <div key={task.id} style={{ ...S.listRow, marginBottom: 6, opacity: task.completed ? .5 : 1, cursor: "pointer" }} onClick={() => { go(task.projectId, "tasks"); onClose(); }}>
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: task.completed ? "#2BAA8E" : "#E8853A", flexShrink: 0 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, fontSize: 13, color: "#333", textDecoration: task.completed ? "line-through" : "none" }}>{task.title}</div>
+                      <div style={{ fontSize: 11, color: "#999", display: "flex", gap: 8, marginTop: 2 }}>
+                        {proj && <span>{proj.name}</span>}
+                        {assignees.map(a => <span key={a.id} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}><span style={{ width: 5, height: 5, borderRadius: "50%", background: a.color }} />{a.name}</span>)}
+                      </div>
+                    </div>
+                    <Ic d={P.back} size={12} color="#ccc" style={{ transform: "rotate(180deg)" }} />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {!selDay && <p style={{ color: "#bbb", fontSize: 13, textAlign: "center", paddingTop: 16 }}>Pulsa un día para ver sus tareas</p>}
+        </div>
+
+        {/* Close button */}
+        <div style={{ padding: "12px 16px", borderTop: "1px solid #eee" }}>
+          <button style={{ ...S.btnP, width: "100%", justifyContent: "center", borderRadius: 16 }} onClick={onClose}>Cerrar</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -921,6 +1055,7 @@ const S = {
   addBtn: { width: 38, height: 38, borderRadius: 14, background: "#E8853A", border: "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", boxShadow: "0 2px 8px rgba(232,133,58,.3)" },
   iconBtn: { background: "none", border: "none", cursor: "pointer", padding: 4, borderRadius: 8, display: "flex", alignItems: "center" },
   chipBtn: { padding: "5px 12px", borderRadius: 20, background: "#F7F7F9", border: "1.5px solid #e0e0e0", color: "#555", fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all .15s" },
+  calBtn: { width: 34, height: 34, borderRadius: 12, background: "#FFF3E8", border: "1.5px solid #F5D5B5", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 },
   listRow: { display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 16, background: "#fff", border: "1px solid #eee", marginBottom: 6, boxShadow: "0 1px 3px rgba(0,0,0,.02)" },
   cb: { width: 22, height: 22, borderRadius: 8, border: "2px solid #ddd", background: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, transition: "all .15s" },
   pillBar: { display: "flex", gap: 6, marginBottom: 18, overflowX: "auto", paddingBottom: 2 },
