@@ -245,7 +245,10 @@ function Home({ projects, tasks, shoppingLists, notes, isA, go, user, users }) {
   const [f, setF] = useState({ name: "", description: "", color: "#E8853A" });
 
   const allT = tasks.filter(t => !t.completed);
-  const myT = isA ? allT : allT.filter(t => t.assigneeId === user.uid);
+  const myT = isA ? allT : allT.filter(t => {
+    const ids = t.assigneeIds || (t.assigneeId ? [t.assigneeId] : []);
+    return ids.includes(user.uid);
+  });
   const urgTasks = myT.map(t => ({ ...t, _p: projects.find(p => p.id === t.projectId), _a: users.find(u => u.id === t.assigneeId), _type: "task", _sd: t.date || "9999" })).sort((a, b) => a._sd.localeCompare(b._sd));
   const urgLists = shoppingLists.filter(s => !(s.items?.length > 0 && s.items.every(i => i.checked))).map(s => ({ ...s, _p: projects.find(p => p.id === s.projectId), _type: "list", _sd: s.dueDate || "9999", _ck: (s.items || []).filter(i => i.checked).length })).sort((a, b) => a._sd.localeCompare(b._sd));
   const urgent = [...urgTasks.slice(0, 4), ...urgLists.slice(0, 2)].sort((a, b) => a._sd.localeCompare(b._sd)).slice(0, 5);
@@ -380,14 +383,21 @@ function ProjView({ proj, tasks, shoppingLists, notes, plans, isA, user, tab, se
 /* ═══ TASKS ═══ */
 function TasksView({ proj, tasks, isA, user, users }) {
   const [show, setShow] = useState(false);
-  const [f, setF] = useState({ title: "", assigneeId: "", date: today(), description: "" });
+  const [f, setF] = useState({ title: "", assigneeIds: [], date: today(), description: "" });
   const [ed, setEd] = useState(null); const [ef, setEf] = useState({});
-  const mine = isA ? tasks : tasks.filter(t => t.assigneeId === user.uid);
+  const mine = isA ? tasks : tasks.filter(t => {
+    const ids = t.assigneeIds || (t.assigneeId ? [t.assigneeId] : []);
+    return ids.includes(user.uid);
+  });
+
+  const toggleAssignee = (uid, current) => {
+    return current.includes(uid) ? current.filter(id => id !== uid) : [...current, uid];
+  };
 
   const create = async () => {
     if (!f.title.trim()) return;
-    await addToCollection("tasks", { ...f, projectId: proj.id, completed: false, completedAt: null });
-    setF({ title: "", assigneeId: "", date: today(), description: "" }); setShow(false);
+    await addToCollection("tasks", { title: f.title, description: f.description, date: f.date, assigneeIds: f.assigneeIds, projectId: proj.id, completed: false, completedAt: null });
+    setF({ title: "", assigneeIds: [], date: today(), description: "" }); setShow(false);
   };
   const toggle = async (task) => {
     const c = !task.completed;
@@ -396,7 +406,12 @@ function TasksView({ proj, tasks, isA, user, users }) {
   };
   const saveEdit = async () => {
     if (!ef.title?.trim()) return;
-    await updateInCollection("tasks", ed, ef); setEd(null);
+    await updateInCollection("tasks", ed, { title: ef.title, description: ef.description, date: ef.date, assigneeIds: ef.assigneeIds || [] }); setEd(null);
+  };
+
+  const getAssignees = (task) => {
+    const ids = task.assigneeIds || (task.assigneeId ? [task.assigneeId] : []);
+    return ids.map(id => users.find(u => u.id === id)).filter(Boolean);
   };
 
   return (
@@ -406,23 +421,33 @@ function TasksView({ proj, tasks, isA, user, users }) {
         <div style={{ ...S.formCard, marginBottom: 14 }}>
           <input style={S.inp} placeholder="Título" value={f.title} onChange={e => setF({ ...f, title: e.target.value })} />
           <textarea style={{ ...S.inp, minHeight: 40, resize: "vertical" }} placeholder="Descripción" value={f.description} onChange={e => setF({ ...f, description: e.target.value })} />
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <select style={{ ...S.inp, flex: 1, minWidth: 130 }} value={f.assigneeId} onChange={e => setF({ ...f, assigneeId: e.target.value })}><option value="">Asignar a...</option>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select>
-            <input style={{ ...S.inp, flex: 1, minWidth: 130 }} type="date" value={f.date} onChange={e => setF({ ...f, date: e.target.value })} />
+          <div><label style={{ fontSize: 12, color: "#999", fontWeight: 600 }}>Asignar a:</label>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+              {users.map(u => {
+                const sel = f.assigneeIds.includes(u.id);
+                return <button key={u.id} type="button" style={{ ...S.chipBtn, ...(sel ? { background: u.color || "#E8853A", color: "#fff", borderColor: u.color || "#E8853A" } : {}) }} onClick={() => setF({ ...f, assigneeIds: toggleAssignee(u.id, f.assigneeIds) })}>{u.name}</button>;
+              })}
+            </div>
           </div>
+          <input style={S.inp} type="date" value={f.date} onChange={e => setF({ ...f, date: e.target.value })} />
           <div style={{ display: "flex", gap: 8 }}><button style={S.btnP} onClick={create}>Crear</button><button style={S.btnG} onClick={() => setShow(false)}>Cancelar</button></div>
         </div>
       )}
       {mine.map(task => {
-        const a = users.find(u => u.id === task.assigneeId);
+        const assignees = getAssignees(task);
         if (ed === task.id) return (
           <div key={task.id} style={{ ...S.formCard, marginBottom: 8, borderColor: "#E8853A", borderWidth: 2 }}>
             <input style={S.inp} value={ef.title || ""} onChange={e => setEf({ ...ef, title: e.target.value })} />
             <textarea style={{ ...S.inp, minHeight: 36, resize: "vertical" }} value={ef.description || ""} onChange={e => setEf({ ...ef, description: e.target.value })} />
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <select style={{ ...S.inp, flex: 1, minWidth: 120 }} value={ef.assigneeId || ""} onChange={e => setEf({ ...ef, assigneeId: e.target.value })}><option value="">Asignar...</option>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select>
-              <input style={{ ...S.inp, flex: 1, minWidth: 120 }} type="date" value={ef.date || ""} onChange={e => setEf({ ...ef, date: e.target.value })} />
+            <div><label style={{ fontSize: 12, color: "#999", fontWeight: 600 }}>Asignar a:</label>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                {users.map(u => {
+                  const sel = (ef.assigneeIds || []).includes(u.id);
+                  return <button key={u.id} type="button" style={{ ...S.chipBtn, ...(sel ? { background: u.color || "#E8853A", color: "#fff", borderColor: u.color || "#E8853A" } : {}) }} onClick={() => setEf({ ...ef, assigneeIds: toggleAssignee(u.id, ef.assigneeIds || []) })}>{u.name}</button>;
+                })}
+              </div>
             </div>
+            <input style={S.inp} type="date" value={ef.date || ""} onChange={e => setEf({ ...ef, date: e.target.value })} />
             <div style={{ display: "flex", gap: 8 }}><button style={S.btnP} onClick={saveEdit}>Guardar</button><button style={S.btnG} onClick={() => setEd(null)}>Cancelar</button></div>
           </div>
         );
@@ -432,13 +457,13 @@ function TasksView({ proj, tasks, isA, user, users }) {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 600, color: "#333", fontSize: 14, textDecoration: task.completed ? "line-through" : "none" }}>{task.title}</div>
               {task.description && <div style={{ fontSize: 12, color: "#999", marginTop: 1 }}>{task.description}</div>}
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 5 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 5 }}>
                 {task.date && <span style={{ fontSize: 11, color: task.date < today() ? "#E85D5D" : task.date === today() ? "#E8853A" : "#999" }}><Ic d={P.cal} size={11} color="currentColor" /> {task.date === today() ? "Hoy" : fmtDate(task.date)}</span>}
-                {a && <span style={{ fontSize: 11, color: "#999" }}><span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: a.color, marginRight: 3 }} />{a.name}</span>}
+                {assignees.map(a => <span key={a.id} style={{ fontSize: 11, color: "#999" }}><span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: a.color, marginRight: 3 }} />{a.name}</span>)}
               </div>
             </div>
             <div style={{ display: "flex", gap: 2 }}>
-              {isA && <button style={S.iconBtn} onClick={() => { setEd(task.id); setEf({ title: task.title, assigneeId: task.assigneeId || "", date: task.date || "", description: task.description || "" }); }}><Ic d={P.edit} size={14} color="#ccc" /></button>}
+              {isA && <button style={S.iconBtn} onClick={() => { setEd(task.id); setEf({ title: task.title, assigneeIds: task.assigneeIds || (task.assigneeId ? [task.assigneeId] : []), date: task.date || "", description: task.description || "" }); }}><Ic d={P.edit} size={14} color="#ccc" /></button>}
               {isA && <button style={S.iconBtn} onClick={() => deleteFromCollection("tasks", task.id)}><Ic d={P.trash} size={14} color="#ccc" /></button>}
             </div>
           </div>
@@ -895,6 +920,7 @@ const S = {
   btnG: { display: "inline-flex", alignItems: "center", gap: 5, padding: "10px 16px", borderRadius: 14, background: "#fff", border: "1px solid #ddd", color: "#555", fontSize: 13, fontWeight: 600, cursor: "pointer" },
   addBtn: { width: 38, height: 38, borderRadius: 14, background: "#E8853A", border: "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", boxShadow: "0 2px 8px rgba(232,133,58,.3)" },
   iconBtn: { background: "none", border: "none", cursor: "pointer", padding: 4, borderRadius: 8, display: "flex", alignItems: "center" },
+  chipBtn: { padding: "5px 12px", borderRadius: 20, background: "#F7F7F9", border: "1.5px solid #e0e0e0", color: "#555", fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all .15s" },
   listRow: { display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 16, background: "#fff", border: "1px solid #eee", marginBottom: 6, boxShadow: "0 1px 3px rgba(0,0,0,.02)" },
   cb: { width: 22, height: 22, borderRadius: 8, border: "2px solid #ddd", background: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, transition: "all .15s" },
   pillBar: { display: "flex", gap: 6, marginBottom: 18, overflowX: "auto", paddingBottom: 2 },
