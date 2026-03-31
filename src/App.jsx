@@ -11,6 +11,7 @@ import {
 import {
   ref as storageRef, uploadBytes, getDownloadURL, deleteObject
 } from "firebase/storage";
+import { jsPDF } from "jspdf";
 
 /* ─── HELPERS ─── */
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -492,6 +493,7 @@ function TeamView({ users }) {
 /* ═══ PROJECT VIEW ═══ */
 function ProjView({ proj, tasks, shoppingLists, notes, plans, isA, user, tab, setTab, users, goBack }) {
   const [confirmFinish, setConfirmFinish] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const tabs = [{ id: "tasks", label: "Tareas", icon: P.task }, { id: "shopping", label: "Compras", icon: P.cart }, { id: "notes", label: "Notas", icon: P.note }, { id: "plans", label: "Planos", icon: P.plan }];
   const projTasks = tasks.filter(t => t.projectId === proj.id);
   const projLists = shoppingLists.filter(s => s.projectId === proj.id);
@@ -503,9 +505,233 @@ function ProjView({ proj, tasks, shoppingLists, notes, plans, isA, user, tab, se
     goBack();
   };
 
+  const getAssigneeNames = (task) => {
+    const ids = task.assigneeIds || (task.assigneeId ? [task.assigneeId] : []);
+    return ids.map(id => users.find(u => u.id === id)?.name || "?").join(", ");
+  };
+
+  const loadImageAsBase64 = async (url) => {
+    try {
+      const res = await fetch(url, { mode: "cors" });
+      const blob = await res.blob();
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(blob);
+      });
+    } catch { return null; }
+  };
+
+  const exportPDF = async () => {
+    setExporting(true);
+    try {
+      const pdf = new jsPDF("p", "mm", "a4");
+      const W = 190; // usable width
+      const LM = 10; // left margin
+      let y = 10;
+
+      const checkPage = (need = 20) => { if (y + need > 280) { pdf.addPage(); y = 10; } };
+      const drawLine = () => { pdf.setDrawColor(220); pdf.line(LM, y, LM + W, y); y += 4; };
+      const ts = (d) => { if (!d) return ""; try { return new Date(d.seconds ? d.seconds * 1000 : d).toLocaleDateString("es-ES", { day: "numeric", month: "short", year: "numeric" }); } catch { return String(d); } };
+
+      // ─── HEADER ───
+      pdf.setFillColor(232, 133, 58);
+      pdf.rect(0, 0, 210, 32, "F");
+      pdf.setTextColor(255);
+      pdf.setFontSize(22);
+      pdf.setFont("helvetica", "bold");
+      pdf.text(proj.name, LM, 16);
+      pdf.setFontSize(10);
+      pdf.setFont("helvetica", "normal");
+      pdf.text(`Reporte generado el ${new Date().toLocaleDateString("es-ES", { day: "numeric", month: "long", year: "numeric" })}`, LM, 24);
+      if (proj.description) { pdf.text(proj.description, LM, 29); }
+      y = 40;
+      pdf.setTextColor(0);
+
+      // ─── RESUMEN ───
+      const totalT = projTasks.length;
+      const doneT = projTasks.filter(t => t.completed).length;
+      const pendT = totalT - doneT;
+      pdf.setFontSize(11);
+      pdf.setFont("helvetica", "bold");
+      pdf.text("Resumen", LM, y); y += 6;
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(10);
+      pdf.text(`Tareas: ${totalT} total, ${doneT} completadas, ${pendT} pendientes`, LM, y); y += 5;
+      pdf.text(`Listas de compra: ${projLists.length}`, LM, y); y += 5;
+      pdf.text(`Notas: ${projNotes.length}`, LM, y); y += 5;
+      pdf.text(`Planos: ${projPlans.length}`, LM, y); y += 8;
+      drawLine();
+
+      // ─── TAREAS ───
+      const sortedTasks = [...projTasks].sort((a, b) => (a.date || "9999").localeCompare(b.date || "9999"));
+      if (sortedTasks.length > 0) {
+        checkPage(20);
+        pdf.setFontSize(14);
+        pdf.setFont("helvetica", "bold");
+        pdf.setTextColor(59, 130, 196);
+        pdf.text("Tareas", LM, y); y += 8;
+        pdf.setTextColor(0);
+
+        for (const task of sortedTasks) {
+          checkPage(18);
+          const status = task.completed ? "✓" : "○";
+          const assignees = getAssigneeNames(task);
+
+          pdf.setFontSize(11);
+          pdf.setFont("helvetica", "bold");
+          pdf.text(`${status}  ${task.title}`, LM, y); y += 5;
+
+          pdf.setFontSize(9);
+          pdf.setFont("helvetica", "normal");
+          pdf.setTextColor(120);
+          const meta = [task.date ? fmtDate(task.date) : null, assignees || null, task.completed ? "Completada" : "Pendiente"].filter(Boolean).join("  ·  ");
+          pdf.text(meta, LM + 4, y); y += 4;
+
+          if (task.description) {
+            const descLines = pdf.splitTextToSize(task.description, W - 8);
+            checkPage(descLines.length * 4 + 2);
+            pdf.text(descLines, LM + 4, y); y += descLines.length * 4;
+          }
+          pdf.setTextColor(0);
+          y += 3;
+        }
+        drawLine();
+      }
+
+      // ─── LISTAS DE COMPRA ───
+      if (projLists.length > 0) {
+        checkPage(20);
+        pdf.setFontSize(14);
+        pdf.setFont("helvetica", "bold");
+        pdf.setTextColor(232, 133, 58);
+        pdf.text("Listas de compra", LM, y); y += 8;
+        pdf.setTextColor(0);
+
+        for (const list of projLists) {
+          checkPage(14);
+          pdf.setFontSize(11);
+          pdf.setFont("helvetica", "bold");
+          const ck = (list.items || []).filter(i => i.checked).length;
+          pdf.text(`${list.name}  (${ck}/${(list.items || []).length})`, LM, y); y += 5;
+          if (list.dueDate) { pdf.setFontSize(9); pdf.setFont("helvetica", "normal"); pdf.setTextColor(120); pdf.text(`Fecha límite: ${fmtDate(list.dueDate)}`, LM + 4, y); y += 4; pdf.setTextColor(0); }
+
+          for (const item of (list.items || [])) {
+            checkPage(6);
+            pdf.setFontSize(9);
+            pdf.setFont("helvetica", "normal");
+            const check = item.checked ? "☑" : "☐";
+            pdf.text(`  ${check}  ${item.text}`, LM + 4, y); y += 4;
+          }
+          y += 4;
+        }
+        drawLine();
+      }
+
+      // ─── NOTAS ───
+      const sortedNotes = [...projNotes].sort((a, b) => {
+        const ta = a.createdAt?.seconds || 0;
+        const tb = b.createdAt?.seconds || 0;
+        return ta - tb;
+      });
+
+      if (sortedNotes.length > 0) {
+        checkPage(20);
+        pdf.setFontSize(14);
+        pdf.setFont("helvetica", "bold");
+        pdf.setTextColor(139, 109, 196);
+        pdf.text("Notas", LM, y); y += 8;
+        pdf.setTextColor(0);
+
+        for (const note of sortedNotes) {
+          checkPage(16);
+          pdf.setFontSize(9);
+          pdf.setFont("helvetica", "normal");
+          pdf.setTextColor(120);
+          pdf.text(`${note.userName || "?"} — ${ts(note.createdAt)}`, LM, y); y += 5;
+          pdf.setTextColor(0);
+
+          if (note.type === "text") {
+            pdf.setFontSize(10);
+            const lines = pdf.splitTextToSize(note.content || "", W - 4);
+            checkPage(lines.length * 4 + 4);
+            pdf.text(lines, LM + 2, y); y += lines.length * 4 + 2;
+          }
+
+          if (note.type === "audio") {
+            pdf.setFontSize(9);
+            pdf.setTextColor(100);
+            pdf.text("[Nota de voz]", LM + 2, y); y += 5;
+            pdf.setTextColor(0);
+          }
+
+          if (note.type === "image" && note.content?.startsWith("http")) {
+            try {
+              const imgData = await loadImageAsBase64(note.content);
+              if (imgData) {
+                checkPage(65);
+                pdf.addImage(imgData, "JPEG", LM + 2, y, 60, 45);
+                y += 47;
+              }
+            } catch { /* skip image if fails */ }
+            if (note.noteText) {
+              checkPage(6);
+              pdf.setFontSize(9);
+              pdf.setTextColor(100);
+              const capLines = pdf.splitTextToSize(note.noteText, W - 8);
+              pdf.text(capLines, LM + 2, y); y += capLines.length * 4;
+              pdf.setTextColor(0);
+            }
+            y += 2;
+          }
+          y += 3;
+        }
+        drawLine();
+      }
+
+      // ─── PLANOS ───
+      if (projPlans.length > 0) {
+        checkPage(20);
+        pdf.setFontSize(14);
+        pdf.setFont("helvetica", "bold");
+        pdf.setTextColor(43, 170, 142);
+        pdf.text("Planos y archivos", LM, y); y += 8;
+        pdf.setTextColor(0);
+
+        for (const plan of projPlans) {
+          checkPage(8);
+          pdf.setFontSize(10);
+          pdf.setFont("helvetica", "normal");
+          const ext = (plan.name || "").split(".").pop().toUpperCase();
+          pdf.text(`• ${plan.name}  (${ext})`, LM + 2, y); y += 5;
+        }
+      }
+
+      // ─── FOOTER ───
+      const pageCount = pdf.internal.getNumberOfPages();
+      for (let i = 1; i <= pageCount; i++) {
+        pdf.setPage(i);
+        pdf.setFontSize(8);
+        pdf.setTextColor(180);
+        pdf.text(`Singular — ${proj.name} — Página ${i}/${pageCount}`, 105, 292, { align: "center" });
+      }
+
+      pdf.save(`${proj.name.replace(/[^a-zA-Z0-9áéíóúñÁÉÍÓÚÑ ]/g, "_")}_reporte.pdf`);
+    } catch (err) {
+      console.error("Export error:", err);
+      alert("Error al generar el PDF: " + err.message);
+    }
+    setExporting(false);
+  };
+
   return (
     <div>
-      <div style={S.pillBar}>{tabs.map(t => <button key={t.id} style={{ ...S.pill, ...(tab === t.id ? S.pillOn : {}) }} onClick={() => setTab(t.id)}>{t.label}</button>)}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <div style={S.pillBar}>{tabs.map(t => <button key={t.id} style={{ ...S.pill, ...(tab === t.id ? S.pillOn : {}) }} onClick={() => setTab(t.id)}>{t.label}</button>)}</div>
+        {isA && <button style={S.calBtn} onClick={exportPDF} disabled={exporting} title="Exportar PDF"><Ic d={P.download} size={16} color={exporting ? "#ccc" : "#E8853A"} /></button>}
+      </div>
+      {exporting && <div style={{ fontSize: 12, color: "#E8853A", fontWeight: 600, marginBottom: 10, textAlign: "center" }}>Generando PDF...</div>}
       {tab === "tasks" && <TasksView proj={proj} tasks={projTasks} isA={isA} user={user} users={users} />}
       {tab === "shopping" && <ShopView proj={proj} lists={projLists} isA={isA} />}
       {tab === "notes" && <NotesView proj={proj} notes={projNotes} user={user} users={users} />}
