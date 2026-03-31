@@ -92,6 +92,7 @@ export default function App() {
   const [selP, setSelP] = useState(null);
   const [tab, setTab] = useState("tasks");
   const [notif, setNotif] = useState(false);
+  const exportRef = useRef(null);
 
   // Listen to auth state
   useEffect(() => {
@@ -137,7 +138,8 @@ export default function App() {
         {view === "project" && proj ? (
           <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
             <button style={S.backBtn} onClick={() => setView("home")}><Ic d={P.back} size={20} color="#333" /></button>
-            <h1 style={S.topTitle}>{proj.name}</h1>
+            <h1 style={{ ...S.topTitle, flex: 1 }}>{proj.name}</h1>
+            {isA && <button style={S.calBtn} onClick={() => exportRef.current?.()} title="Exportar PDF"><Ic d={P.download} size={16} color="#E8853A" /></button>}
           </div>
         ) : (
           <h1 style={S.topTitle}>{view === "home" ? `Hola, ${user.name}` : "Equipo"}</h1>
@@ -155,7 +157,7 @@ export default function App() {
       <div style={S.content}>
         {view === "home" && <Home projects={projects} tasks={tasks} shoppingLists={shoppingLists} notes={notes} isA={isA} go={go} user={user} users={users} />}
         {view === "team" && isA && <TeamView users={users} />}
-        {view === "project" && proj && <ProjView proj={proj} tasks={tasks} shoppingLists={shoppingLists} notes={notes} plans={plans} isA={isA} user={user} tab={tab} setTab={setTab} users={users} goBack={() => setView("home")} />}
+        {view === "project" && proj && <ProjView proj={proj} tasks={tasks} shoppingLists={shoppingLists} notes={notes} plans={plans} isA={isA} user={user} tab={tab} setTab={setTab} users={users} goBack={() => setView("home")} exportRef={exportRef} />}
       </div>
 
       {view !== "project" && (
@@ -491,7 +493,7 @@ function TeamView({ users }) {
 }
 
 /* ═══ PROJECT VIEW ═══ */
-function ProjView({ proj, tasks, shoppingLists, notes, plans, isA, user, tab, setTab, users, goBack }) {
+function ProjView({ proj, tasks, shoppingLists, notes, plans, isA, user, tab, setTab, users, goBack, exportRef }) {
   const [confirmFinish, setConfirmFinish] = useState(false);
   const [exporting, setExporting] = useState(false);
   const tabs = [{ id: "tasks", label: "Tareas", icon: P.task }, { id: "shopping", label: "Compras", icon: P.cart }, { id: "notes", label: "Notas", icon: P.note }, { id: "plans", label: "Planos", icon: P.plan }];
@@ -505,22 +507,39 @@ function ProjView({ proj, tasks, shoppingLists, notes, plans, isA, user, tab, se
     goBack();
   };
 
+  // Register export function on parent ref
+  useEffect(() => {
+    if (exportRef) exportRef.current = exportPDF;
+    return () => { if (exportRef) exportRef.current = null; };
+  });
+
   const getAssigneeNames = (task) => {
     const ids = task.assigneeIds || (task.assigneeId ? [task.assigneeId] : []);
     return ids.map(id => users.find(u => u.id === id)?.name || "?").join(", ");
   };
 
   const loadImageAsBase64 = async (url) => {
-    try {
-      const res = await fetch(url, { mode: "cors" });
-      const blob = await res.blob();
-      return new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = () => resolve(null);
-        reader.readAsDataURL(blob);
-      });
-    } catch { return null; }
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        try {
+          const canvas = document.createElement("canvas");
+          // Limit size for PDF
+          const maxW = 800, maxH = 600;
+          let w = img.width, h = img.height;
+          if (w > maxW) { h = Math.round(h * maxW / w); w = maxW; }
+          if (h > maxH) { w = Math.round(w * maxH / h); h = maxH; }
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, w, h);
+          resolve({ data: canvas.toDataURL("image/jpeg", 0.7), w, h });
+        } catch { resolve(null); }
+      };
+      img.onerror = () => resolve(null);
+      img.src = url;
+    });
   };
 
   const exportPDF = async () => {
@@ -668,11 +687,21 @@ function ProjView({ proj, tasks, shoppingLists, notes, plans, isA, user, tab, se
 
           if (note.type === "image" && note.content?.startsWith("http")) {
             try {
-              const imgData = await loadImageAsBase64(note.content);
-              if (imgData) {
-                checkPage(65);
-                pdf.addImage(imgData, "JPEG", LM + 2, y, 60, 45);
-                y += 47;
+              const imgResult = await loadImageAsBase64(note.content);
+              if (imgResult && imgResult.data) {
+                // Scale to fit max 80mm wide, keep aspect ratio
+                const maxPdfW = 80;
+                const maxPdfH = 60;
+                let pdfW = maxPdfW;
+                let pdfH = (imgResult.h / imgResult.w) * pdfW;
+                if (pdfH > maxPdfH) { pdfH = maxPdfH; pdfW = (imgResult.w / imgResult.h) * pdfH; }
+                checkPage(pdfH + 10);
+                pdf.addImage(imgResult.data, "JPEG", LM + 2, y, pdfW, pdfH);
+                y += pdfH + 2;
+              } else {
+                pdf.setFontSize(9); pdf.setTextColor(150);
+                pdf.text("[Imagen no disponible]", LM + 2, y); y += 5;
+                pdf.setTextColor(0);
               }
             } catch { /* skip image if fails */ }
             if (note.noteText) {
@@ -727,10 +756,7 @@ function ProjView({ proj, tasks, shoppingLists, notes, plans, isA, user, tab, se
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-        <div style={S.pillBar}>{tabs.map(t => <button key={t.id} style={{ ...S.pill, ...(tab === t.id ? S.pillOn : {}) }} onClick={() => setTab(t.id)}>{t.label}</button>)}</div>
-        {isA && <button style={S.calBtn} onClick={exportPDF} disabled={exporting} title="Exportar PDF"><Ic d={P.download} size={16} color={exporting ? "#ccc" : "#E8853A"} /></button>}
-      </div>
+      <div style={S.pillBar}>{tabs.map(t => <button key={t.id} style={{ ...S.pill, ...(tab === t.id ? S.pillOn : {}) }} onClick={() => setTab(t.id)}>{t.label}</button>)}</div>
       {exporting && <div style={{ fontSize: 12, color: "#E8853A", fontWeight: 600, marginBottom: 10, textAlign: "center" }}>Generando PDF...</div>}
       {tab === "tasks" && <TasksView proj={proj} tasks={projTasks} isA={isA} user={user} users={users} />}
       {tab === "shopping" && <ShopView proj={proj} lists={projLists} isA={isA} />}
