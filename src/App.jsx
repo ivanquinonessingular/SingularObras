@@ -519,27 +519,56 @@ function ProjView({ proj, tasks, shoppingLists, notes, plans, isA, user, tab, se
   };
 
   const loadImageAsBase64 = async (url) => {
-    return new Promise((resolve) => {
-      const img = new Image();
-      img.crossOrigin = "anonymous";
-      img.onload = () => {
-        try {
-          const canvas = document.createElement("canvas");
-          // Limit size for PDF
-          const maxW = 800, maxH = 600;
-          let w = img.width, h = img.height;
-          if (w > maxW) { h = Math.round(h * maxW / w); w = maxW; }
-          if (h > maxH) { w = Math.round(w * maxH / h); h = maxH; }
-          canvas.width = w;
-          canvas.height = h;
-          const ctx = canvas.getContext("2d");
-          ctx.drawImage(img, 0, 0, w, h);
-          resolve({ data: canvas.toDataURL("image/jpeg", 0.7), w, h });
-        } catch { resolve(null); }
-      };
-      img.onerror = () => resolve(null);
-      img.src = url;
-    });
+    // Method 1: Try fetch with blob URL to bypass CORS canvas tainting
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("fetch failed");
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const maxW = 800, maxH = 600;
+            let w = img.width, h = img.height;
+            if (w > maxW) { h = Math.round(h * maxW / w); w = maxW; }
+            if (h > maxH) { w = Math.round(w * maxH / h); h = maxH; }
+            const canvas = document.createElement("canvas");
+            canvas.width = w; canvas.height = h;
+            canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+            const data = canvas.toDataURL("image/jpeg", 0.7);
+            URL.revokeObjectURL(blobUrl);
+            resolve({ data, w, h });
+          } catch { URL.revokeObjectURL(blobUrl); resolve(null); }
+        };
+        img.onerror = () => { URL.revokeObjectURL(blobUrl); resolve(null); };
+        img.src = blobUrl;
+      });
+    } catch {
+      // Method 2: Fallback - read blob directly as dataURL
+      try {
+        const res = await fetch(url);
+        const blob = await res.blob();
+        return new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const img = new Image();
+            img.onload = () => {
+              const maxW = 800, maxH = 600;
+              let w = img.width, h = img.height;
+              if (w > maxW) { h = Math.round(h * maxW / w); w = maxW; }
+              if (h > maxH) { w = Math.round(w * maxH / h); h = maxH; }
+              resolve({ data: reader.result, w, h });
+            };
+            img.onerror = () => resolve(null);
+            img.src = reader.result;
+          };
+          reader.onerror = () => resolve(null);
+          reader.readAsDataURL(blob);
+        });
+      } catch { return null; }
+    }
   };
 
   const exportPDF = async () => {
