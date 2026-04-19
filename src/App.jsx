@@ -52,6 +52,41 @@ const COLORS = [
   {bg:"#D4A03C",fg:"#fff"},{bg:"#4AA3C4",fg:"#fff"},
 ];
 
+/* ═══════ ANIMATIONS (native-feel transitions) ═══════ */
+const ANIM_CSS = `
+  @keyframes slideInRight { from { transform: translate3d(100%,0,0); } to { transform: translate3d(0,0,0); } }
+  @keyframes slideOutRight { from { transform: translate3d(0,0,0); } to { transform: translate3d(100%,0,0); } }
+  @keyframes slideUp { from { transform: translate3d(0,100%,0); } to { transform: translate3d(0,0,0); } }
+  @keyframes slideDown { from { transform: translate3d(0,0,0); } to { transform: translate3d(0,100%,0); } }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
+  @keyframes popIn { from { opacity: 0; transform: scale(.94) translateY(-4px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+  @keyframes tabIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+  .view-enter-right { animation: slideInRight .3s cubic-bezier(.32,.72,0,1); will-change: transform; }
+  .view-exit-right { animation: slideOutRight .26s cubic-bezier(.32,.72,0,1) forwards; will-change: transform; }
+  .sheet-in { animation: slideUp .32s cubic-bezier(.32,.72,0,1); will-change: transform; }
+  .sheet-out { animation: slideDown .26s cubic-bezier(.32,.72,0,1) forwards; will-change: transform; }
+  .ov-in { animation: fadeIn .22s ease; }
+  .ov-out { animation: fadeOut .22s ease forwards; }
+  .drawer-in { animation: slideInRight .3s cubic-bezier(.32,.72,0,1); will-change: transform; }
+  .drawer-out { animation: slideOutRight .26s cubic-bezier(.32,.72,0,1) forwards; will-change: transform; }
+  .pop-in { animation: popIn .22s cubic-bezier(.32,.72,0,1); }
+  .tab-in { animation: tabIn .24s cubic-bezier(.32,.72,0,1); }
+
+  button, .tappable {
+    -webkit-tap-highlight-color: transparent;
+    transition: transform .16s cubic-bezier(.32,.72,0,1), opacity .16s ease;
+  }
+  button:not(:disabled):active, .tappable:active {
+    transform: scale(0.96);
+    transition: transform .08s ease-out;
+  }
+  input, textarea, select { -webkit-tap-highlight-color: transparent; }
+  /* Smoother scroll on iOS */
+  * { -webkit-overflow-scrolling: touch; }
+`;
+
 /* ═══════ useFirestore hook — real-time collection listener ═══════ */
 function useCollection(collName, enabled = true) {
   const [docs, setDocs] = useState([]);
@@ -92,6 +127,8 @@ export default function App() {
   const [selP, setSelP] = useState(null);
   const [tab, setTab] = useState("tasks");
   const [notif, setNotif] = useState(false);
+  const [projAnim, setProjAnim] = useState(""); // "" | "enter" | "exit"
+  const [notifAnim, setNotifAnim] = useState(""); // "" | "enter" | "exit"
   const exportRef = useRef(null);
 
   // Listen to auth state
@@ -130,37 +167,49 @@ export default function App() {
   const isA = user.role === "admin";
   const unread = notifications.filter(n => !n.read).length;
   const proj = projects.find(p => p.id === selP);
-  const go = (pid, t = "tasks") => { setSelP(pid); setTab(t); setView("project"); };
+  const overlayOn = view === "project" || projAnim === "exit";
+
+  const go = (pid, t = "tasks") => {
+    setSelP(pid); setTab(t);
+    setProjAnim("enter");
+    setView("project");
+    setTimeout(() => setProjAnim(""), 320);
+  };
+  const closeProject = () => {
+    if (projAnim === "exit") return;
+    setProjAnim("exit");
+    setView("home");
+    setTimeout(() => setProjAnim(""), 280);
+  };
+  const openNotif = () => { setNotif(true); setNotifAnim("enter"); setTimeout(() => setNotifAnim(""), 300); };
+  const closeNotif = () => {
+    if (notifAnim === "exit") return;
+    setNotifAnim("exit");
+    setTimeout(() => { setNotif(false); setNotifAnim(""); }, 260);
+  };
+  const goFromNotif = (pid, t) => { closeNotif(); setTimeout(() => go(pid, t), 220); };
 
   return (
     <div style={S.root}>
+      <style>{ANIM_CSS}</style>
+
+      {/* Main layer (Home / Team) */}
       <div style={S.topBar}>
-        {view === "project" && proj ? (
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
-            <button style={S.backBtn} onClick={() => setView("home")}><Ic d={P.back} size={20} color="#333" /></button>
-            <h1 style={{ ...S.topTitle, flex: 1 }}>{proj.name}</h1>
-            {isA && <button style={S.calBtn} onClick={() => exportRef.current?.()} title="Exportar PDF"><Ic d={P.download} size={16} color="#E8853A" /></button>}
-          </div>
-        ) : (
-          <h1 style={S.topTitle}>{view === "home" ? `Hola, ${user.name}` : "Equipo"}</h1>
-        )}
+        <h1 style={S.topTitle}>{view === "team" ? "Equipo" : `Hola, ${user.name}`}</h1>
         {isA && view === "home" && (
-          <button style={{ ...S.iconBtn, position: "relative" }} onClick={() => setNotif(!notif)}>
+          <button style={{ ...S.iconBtn, position: "relative" }} onClick={() => notif ? closeNotif() : openNotif()}>
             <Ic d={P.bell} size={20} color="#555" />
             {unread > 0 && <span style={S.badge}>{unread}</span>}
           </button>
         )}
       </div>
 
-      {notif && isA && <NPanel notifications={notifications} close={() => setNotif(false)} go={go} />}
-
       <div style={S.content}>
         {view === "home" && <Home projects={projects} tasks={tasks} shoppingLists={shoppingLists} notes={notes} isA={isA} go={go} user={user} users={users} />}
         {view === "team" && isA && <TeamView users={users} />}
-        {view === "project" && proj && <ProjView proj={proj} tasks={tasks} shoppingLists={shoppingLists} notes={notes} plans={plans} isA={isA} user={user} tab={tab} setTab={setTab} users={users} goBack={() => setView("home")} exportRef={exportRef} />}
       </div>
 
-      {view !== "project" && (
+      {!overlayOn && (
         <nav style={S.tabBar}>
           <button style={{ ...S.tabItem, ...(view === "home" ? S.tabOn : {}) }} onClick={() => setView("home")}>
             <Ic d={P.home} size={22} color={view === "home" ? "#E8853A" : "#aaa"} /><span>Inicio</span>
@@ -173,6 +222,28 @@ export default function App() {
           </button>
         </nav>
       )}
+
+      {/* Project overlay (slides in from right) */}
+      {overlayOn && proj && (
+        <div
+          className={projAnim === "enter" ? "view-enter-right" : projAnim === "exit" ? "view-exit-right" : ""}
+          style={S.projOverlay}
+        >
+          <div style={S.topBar}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
+              <button style={S.backBtn} onClick={closeProject}><Ic d={P.back} size={20} color="#333" /></button>
+              <h1 style={{ ...S.topTitle, flex: 1 }}>{proj.name}</h1>
+              {isA && <button style={S.calBtn} onClick={() => exportRef.current?.()} title="Exportar PDF"><Ic d={P.download} size={16} color="#E8853A" /></button>}
+            </div>
+          </div>
+          <div style={S.content}>
+            <ProjView proj={proj} tasks={tasks} shoppingLists={shoppingLists} notes={notes} plans={plans} isA={isA} user={user} tab={tab} setTab={setTab} users={users} goBack={closeProject} exportRef={exportRef} />
+          </div>
+        </div>
+      )}
+
+      {/* Notifications panel (slides in from right) */}
+      {notif && isA && <NPanel notifications={notifications} anim={notifAnim} close={closeNotif} go={goFromNotif} />}
     </div>
   );
 }
@@ -286,7 +357,7 @@ function Home({ projects, tasks, shoppingLists, notes, isA, go, user, users }) {
             <button style={{ ...S.calBtn, marginLeft: "auto" }} onClick={() => setShowCal(true)}><Ic d={P.cal} size={16} color="#E8853A" /></button>
           </div>
           {urgent.map(item => (
-            <div key={item.id} style={S.urgentItem} onClick={() => go(item.projectId, item._type === "task" ? "tasks" : "shopping")}>
+            <div key={item.id} className="tappable" style={S.urgentItem} onClick={() => go(item.projectId, item._type === "task" ? "tasks" : "shopping")}>
               <div style={{ ...S.urgentDot, background: item._type === "task" ? "#3B82C4" : "#E8853A" }}><Ic d={item._type === "task" ? P.task : P.cart} size={13} color="#fff" /></div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 600, fontSize: 13, color: "#333", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item._type === "task" ? item.title : item.name}</div>
@@ -307,7 +378,7 @@ function Home({ projects, tasks, shoppingLists, notes, isA, go, user, users }) {
       </div>
 
       {showNew && isA && (
-        <div style={{ ...S.formCard, marginBottom: 16 }}>
+        <div className="pop-in" style={{ ...S.formCard, marginBottom: 16 }}>
           <input style={S.inp} placeholder="Nombre del proyecto" value={f.name} onChange={e => setF({ ...f, name: e.target.value })} />
           <input style={S.inp} placeholder="Descripción" value={f.description} onChange={e => setF({ ...f, description: e.target.value })} />
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{COLORS.map((c, i) => <button key={i} onClick={() => setF({ ...f, color: c.bg })} style={{ width: 30, height: 30, borderRadius: 10, background: c.bg, border: f.color === c.bg ? "3px solid #333" : "3px solid transparent", cursor: "pointer" }} />)}</div>
@@ -326,7 +397,7 @@ function Home({ projects, tasks, shoppingLists, notes, isA, go, user, users }) {
           const color = ci >= 0 ? COLORS[ci] : COLORS[i % COLORS.length];
           const pct = tc ? Math.round((dc / tc) * 100) : 0;
           return (
-            <div key={p.id} style={{ ...S.projCard, background: color.bg }} onClick={() => go(p.id)}>
+            <div key={p.id} className="tappable" style={{ ...S.projCard, background: color.bg }} onClick={() => go(p.id)}>
               <div style={{ fontSize: 36, fontWeight: 900, color: "rgba(255,255,255,.2)", lineHeight: 1 }}>{pct}%</div>
               <div style={{ marginTop: "auto" }}>
                 <div style={{ fontWeight: 700, fontSize: 16, color: "#fff" }}>{p.name}</div>
@@ -386,8 +457,8 @@ function CalendarView({ tasks, projects, users, isA, user, go, onClose }) {
   };
 
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,.4)", display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={onClose}>
-      <div style={{ background: "#fff", borderRadius: "24px 24px 0 0", width: "100%", maxWidth: 500, maxHeight: "90vh", overflow: "hidden", display: "flex", flexDirection: "column" }} onClick={e => e.stopPropagation()}>
+    <div className="ov-in" style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,.4)", display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={onClose}>
+      <div className="sheet-in" style={{ background: "#fff", borderRadius: "24px 24px 0 0", width: "100%", maxWidth: 500, maxHeight: "90vh", overflow: "hidden", display: "flex", flexDirection: "column" }} onClick={e => e.stopPropagation()}>
 
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 20px 10px" }}>
@@ -787,10 +858,12 @@ function ProjView({ proj, tasks, shoppingLists, notes, plans, isA, user, tab, se
     <div>
       <div style={S.pillBar}>{tabs.map(t => <button key={t.id} style={{ ...S.pill, ...(tab === t.id ? S.pillOn : {}) }} onClick={() => setTab(t.id)}>{t.label}</button>)}</div>
       {exporting && <div style={{ fontSize: 12, color: "#E8853A", fontWeight: 600, marginBottom: 10, textAlign: "center" }}>Generando PDF...</div>}
-      {tab === "tasks" && <TasksView proj={proj} tasks={projTasks} isA={isA} user={user} users={users} />}
-      {tab === "shopping" && <ShopView proj={proj} lists={projLists} isA={isA} />}
-      {tab === "notes" && <NotesView proj={proj} notes={projNotes} user={user} users={users} />}
-      {tab === "plans" && <PlansView proj={proj} plans={projPlans} isA={isA} />}
+      <div key={tab} className="tab-in">
+        {tab === "tasks" && <TasksView proj={proj} tasks={projTasks} isA={isA} user={user} users={users} />}
+        {tab === "shopping" && <ShopView proj={proj} lists={projLists} isA={isA} />}
+        {tab === "notes" && <NotesView proj={proj} notes={projNotes} user={user} users={users} />}
+        {tab === "plans" && <PlansView proj={proj} plans={projPlans} isA={isA} />}
+      </div>
 
       {isA && (
         <div style={{ marginTop: 30, padding: "16px 0", borderTop: "1px solid #eee" }}>
@@ -799,7 +872,7 @@ function ProjView({ proj, tasks, shoppingLists, notes, plans, isA, user, tab, se
               <Ic d={P.check} size={14} color="#999" /> Marcar proyecto como finalizado
             </button>
           ) : (
-            <div style={S.formCard}>
+            <div className="pop-in" style={S.formCard}>
               <p style={{ margin: "0 0 10px", fontSize: 14, color: "#555", textAlign: "center" }}>¿Seguro que quieres finalizar <strong>{proj.name}</strong>?</p>
               <p style={{ margin: "0 0 12px", fontSize: 12, color: "#999", textAlign: "center" }}>El proyecto dejará de aparecer en la página principal. Esta acción se puede revertir desde Firebase.</p>
               <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
@@ -852,7 +925,7 @@ function TasksView({ proj, tasks, isA, user, users }) {
     <div>
       {isA && <button style={{ ...S.btnP, marginBottom: 14 }} onClick={() => setShow(!show)}><Ic d={P.plus} size={14} /> Nueva tarea</button>}
       {show && isA && (
-        <div style={{ ...S.formCard, marginBottom: 14 }}>
+        <div className="pop-in" style={{ ...S.formCard, marginBottom: 14 }}>
           <input style={S.inp} placeholder="Título" value={f.title} onChange={e => setF({ ...f, title: e.target.value })} />
           <textarea style={{ ...S.inp, minHeight: 40, resize: "vertical" }} placeholder="Descripción" value={f.description} onChange={e => setF({ ...f, description: e.target.value })} />
           <div><label style={{ fontSize: 12, color: "#999", fontWeight: 600 }}>Asignar a:</label>
@@ -870,7 +943,7 @@ function TasksView({ proj, tasks, isA, user, users }) {
       {mine.map(task => {
         const assignees = getAssignees(task);
         if (ed === task.id) return (
-          <div key={task.id} style={{ ...S.formCard, marginBottom: 8, borderColor: "#E8853A", borderWidth: 2 }}>
+          <div key={task.id} className="pop-in" style={{ ...S.formCard, marginBottom: 8, borderColor: "#E8853A", borderWidth: 2 }}>
             <input style={S.inp} value={ef.title || ""} onChange={e => setEf({ ...ef, title: e.target.value })} />
             <textarea style={{ ...S.inp, minHeight: 36, resize: "vertical" }} value={ef.description || ""} onChange={e => setEf({ ...ef, description: e.target.value })} />
             <div><label style={{ fontSize: 12, color: "#999", fontWeight: 600 }}>Asignar a:</label>
@@ -946,7 +1019,7 @@ function ShopView({ proj, lists, isA }) {
   return (
     <div>
       {isA && <button style={{ ...S.btnP, marginBottom: 14 }} onClick={() => setShow(!show)}><Ic d={P.plus} size={14} /> Nueva lista</button>}
-      {show && <div style={{ ...S.formCard, marginBottom: 14 }}><input style={S.inp} placeholder="Nombre" value={f.name} onChange={e => setF({ ...f, name: e.target.value })} /><div><label style={{ fontSize: 12, color: "#999" }}>Fecha límite</label><input style={S.inp} type="date" value={f.dueDate} onChange={e => setF({ ...f, dueDate: e.target.value })} /></div><div style={{ display: "flex", gap: 8 }}><button style={S.btnP} onClick={create}>Crear</button><button style={S.btnG} onClick={() => setShow(false)}>Cancelar</button></div></div>}
+      {show && <div className="pop-in" style={{ ...S.formCard, marginBottom: 14 }}><input style={S.inp} placeholder="Nombre" value={f.name} onChange={e => setF({ ...f, name: e.target.value })} /><div><label style={{ fontSize: 12, color: "#999" }}>Fecha límite</label><input style={S.inp} type="date" value={f.dueDate} onChange={e => setF({ ...f, dueDate: e.target.value })} /></div><div style={{ display: "flex", gap: 8 }}><button style={S.btnP} onClick={create}>Crear</button><button style={S.btnG} onClick={() => setShow(false)}>Cancelar</button></div></div>}
 
       {lists.map(list => {
         const ck = (list.items || []).filter(i => i.checked).length;
@@ -954,7 +1027,7 @@ function ShopView({ proj, lists, isA }) {
         const ov = list.dueDate && list.dueDate < today();
 
         if (edL === list.id) return (
-          <div key={list.id} style={{ ...S.formCard, borderColor: "#E8853A", borderWidth: 2 }}>
+          <div key={list.id} className="pop-in" style={{ ...S.formCard, borderColor: "#E8853A", borderWidth: 2 }}>
             <input style={S.inp} value={elf.name || ""} onChange={e => setElf({ ...elf, name: e.target.value })} />
             <div><label style={{ fontSize: 12, color: "#999" }}>Fecha límite</label><input style={S.inp} type="date" value={elf.dueDate || ""} onChange={e => setElf({ ...elf, dueDate: e.target.value })} /></div>
             <div style={{ display: "flex", gap: 8 }}>
@@ -1203,6 +1276,7 @@ function NoteCard({ note, user, onDelete }) {
       {/* Fullscreen image viewer */}
       {fullscreen && (
         <div
+          className="ov-in"
           style={{
             position: "fixed", inset: 0, zIndex: 9999,
             background: "rgba(0,0,0,.92)",
@@ -1305,10 +1379,12 @@ function PlansView({ proj, plans, isA }) {
 }
 
 /* ═══ NOTIF PANEL ═══ */
-function NPanel({ notifications, close, go }) {
+function NPanel({ notifications, close, go, anim }) {
+  const ovClass = anim === "exit" ? "ov-out" : "ov-in";
+  const panClass = anim === "exit" ? "drawer-out" : "drawer-in";
   return (
-    <div style={S.nOv} onClick={close}>
-      <div style={S.nPan} onClick={e => e.stopPropagation()}>
+    <div className={ovClass} style={S.nOv} onClick={close}>
+      <div className={panClass} style={S.nPan} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 18px", borderBottom: "1px solid #eee" }}>
           <span style={{ fontWeight: 800, color: "#333", fontSize: 17 }}>Notificaciones</span>
           <button style={S.iconBtn} onClick={close}><Ic d={P.x} size={18} color="#999" /></button>
@@ -1332,7 +1408,8 @@ function NPanel({ notifications, close, go }) {
 
 /* ═══════ STYLES ═══════ */
 const S = {
-  root: { display: "flex", flexDirection: "column", height: "100vh", background: "#F2F2F7", fontFamily: "-apple-system,'SF Pro Display','Helvetica Neue',sans-serif", overflow: "hidden", color: "#333" },
+  root: { display: "flex", flexDirection: "column", height: "100vh", background: "#F2F2F7", fontFamily: "-apple-system,'SF Pro Display','Helvetica Neue',sans-serif", overflow: "hidden", color: "#333", position: "relative" },
+  projOverlay: { position: "fixed", inset: 0, background: "#F2F2F7", display: "flex", flexDirection: "column", zIndex: 100 },
   loadWrap: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100vh", background: "#F2F2F7" },
   loadIcon: { width: 52, height: 52, borderRadius: 16, background: "linear-gradient(135deg,#E8853A,#D4A03C)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 900, fontSize: 22 },
   topBar: { padding: "16px 20px 8px", background: "#F2F2F7", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 },
