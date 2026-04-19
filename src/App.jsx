@@ -1286,14 +1286,19 @@ function NoteCard({ note, user, onDelete }) {
           onClick={() => setFullscreen(false)}
         >
           <button
+            aria-label="Cerrar"
             style={{
-              position: "absolute", top: 16, right: 16,
-              width: 40, height: 40, borderRadius: 20,
-              background: "rgba(255,255,255,.15)", border: "none",
+              position: "absolute",
+              top: "max(14px, env(safe-area-inset-top, 0px))",
+              right: 14,
+              width: 44, height: 44, borderRadius: 22,
+              background: "rgba(0,0,0,.55)",
+              border: "1.5px solid rgba(255,255,255,.5)",
               display: "flex", alignItems: "center", justifyContent: "center",
-              cursor: "pointer", zIndex: 10000
+              cursor: "pointer", zIndex: 10001,
+              padding: 0, touchAction: "manipulation",
             }}
-            onClick={() => setFullscreen(false)}
+            onClick={(e) => { e.stopPropagation(); setFullscreen(false); }}
           >
             <Ic d={P.x} size={22} color="#fff" />
           </button>
@@ -1302,28 +1307,29 @@ function NoteCard({ note, user, onDelete }) {
               width: "100%", height: "100%",
               overflow: "auto", WebkitOverflowScrolling: "touch",
               display: "flex", alignItems: "center", justifyContent: "center",
-              padding: 16
+              padding: 16,
             }}
-            onClick={e => e.stopPropagation()}
           >
             <img
               src={note.content} alt=""
               style={{
-                maxWidth: "none", maxHeight: "none",
-                width: "auto", height: "auto",
-                minWidth: "100%",
+                maxWidth: "100%", maxHeight: "100%",
                 objectFit: "contain",
                 borderRadius: 4,
                 touchAction: "pinch-zoom",
               }}
+              onClick={(e) => e.stopPropagation()}
             />
           </div>
           {note.noteText && (
             <div style={{
-              position: "absolute", bottom: 20, left: 20, right: 20,
+              position: "absolute",
+              bottom: "max(20px, env(safe-area-inset-bottom, 0px))",
+              left: 20, right: 20,
               background: "rgba(0,0,0,.6)", borderRadius: 12,
               padding: "10px 16px", color: "#fff", fontSize: 14,
-              fontStyle: "italic", textAlign: "center"
+              fontStyle: "italic", textAlign: "center",
+              pointerEvents: "none",
             }}>
               {note.noteText}
             </div>
