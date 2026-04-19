@@ -1215,6 +1215,108 @@ function NotesView({ proj, notes, user, users }) {
   );
 }
 
+/* ═══ ZOOMABLE IMAGE (pinch, pan, double-tap) ═══ */
+function ZoomableImage({ src }) {
+  const [t, setT] = useState({ scale: 1, x: 0, y: 0 });
+  const [active, setActive] = useState(false);
+  const tRef = useRef(t);
+  const touch = useRef(null);
+  const lastTap = useRef(0);
+  const imgRef = useRef(null);
+  const update = (nt) => { tRef.current = nt; setT(nt); };
+
+  useEffect(() => {
+    const el = imgRef.current;
+    if (!el) return;
+    const dist = (ts) => Math.hypot(ts[0].clientX - ts[1].clientX, ts[0].clientY - ts[1].clientY);
+    const center = (ts) => ({ x: (ts[0].clientX + ts[1].clientX) / 2, y: (ts[0].clientY + ts[1].clientY) / 2 });
+
+    const onStart = (e) => {
+      const s = tRef.current;
+      if (e.touches.length === 2) {
+        e.preventDefault();
+        touch.current = { type: "pinch", d: dist(e.touches), c: center(e.touches), ss: s.scale, sx: s.x, sy: s.y };
+        setActive(true);
+      } else if (e.touches.length === 1) {
+        touch.current = { type: "tap", sx: e.touches[0].clientX, sy: e.touches[0].clientY, ix: s.x, iy: s.y };
+      }
+    };
+    const onMove = (e) => {
+      const ts = touch.current;
+      if (!ts) return;
+      if (ts.type === "pinch" && e.touches.length === 2) {
+        e.preventDefault();
+        const d = dist(e.touches), c = center(e.touches);
+        const ns = Math.min(4, Math.max(1, ts.ss * (d / ts.d)));
+        update({ scale: ns, x: ts.sx + (c.x - ts.c.x), y: ts.sy + (c.y - ts.c.y) });
+      } else if (e.touches.length === 1 && (ts.type === "tap" || ts.type === "pan")) {
+        const dx = e.touches[0].clientX - ts.sx;
+        const dy = e.touches[0].clientY - ts.sy;
+        if (ts.type === "tap") {
+          if (Math.hypot(dx, dy) > 10) {
+            if (tRef.current.scale > 1) { ts.type = "pan"; setActive(true); }
+            else { touch.current = null; return; }
+          } else return;
+        }
+        e.preventDefault();
+        update({ scale: tRef.current.scale, x: ts.ix + dx, y: ts.iy + dy });
+      }
+    };
+    const onEnd = () => {
+      const ts = touch.current;
+      if (!ts) return;
+      touch.current = null;
+      setActive(false);
+      if (ts.type === "tap") {
+        const now = Date.now();
+        const dt = now - lastTap.current;
+        if (dt > 0 && dt < 300) {
+          if (tRef.current.scale > 1.05) update({ scale: 1, x: 0, y: 0 });
+          else update({ scale: 2.5, x: 0, y: 0 });
+          lastTap.current = 0;
+        } else lastTap.current = now;
+      } else {
+        lastTap.current = 0;
+        if (tRef.current.scale < 1.05) update({ scale: 1, x: 0, y: 0 });
+      }
+    };
+
+    el.addEventListener("touchstart", onStart, { passive: false });
+    el.addEventListener("touchmove", onMove, { passive: false });
+    el.addEventListener("touchend", onEnd, { passive: false });
+    el.addEventListener("touchcancel", onEnd, { passive: false });
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+      el.removeEventListener("touchend", onEnd);
+      el.removeEventListener("touchcancel", onEnd);
+    };
+  }, []);
+
+  return (
+    <img
+      ref={imgRef}
+      src={src}
+      alt=""
+      onClick={(e) => e.stopPropagation()}
+      draggable={false}
+      style={{
+        transform: `translate3d(${t.x}px, ${t.y}px, 0) scale(${t.scale})`,
+        transition: active ? "none" : "transform .28s cubic-bezier(.32,.72,0,1)",
+        transformOrigin: "center center",
+        touchAction: "none",
+        maxWidth: "100%",
+        maxHeight: "100%",
+        objectFit: "contain",
+        userSelect: "none",
+        WebkitUserSelect: "none",
+        WebkitTouchCallout: "none",
+        willChange: "transform",
+      }}
+    />
+  );
+}
+
 /* ═══ NOTE CARD (with editable comment for images) ═══ */
 function NoteCard({ note, user, onDelete }) {
   const [editing, setEditing] = useState(false);
@@ -1305,21 +1407,12 @@ function NoteCard({ note, user, onDelete }) {
           <div
             style={{
               width: "100%", height: "100%",
-              overflow: "auto", WebkitOverflowScrolling: "touch",
+              overflow: "hidden",
               display: "flex", alignItems: "center", justifyContent: "center",
               padding: 16,
             }}
           >
-            <img
-              src={note.content} alt=""
-              style={{
-                maxWidth: "100%", maxHeight: "100%",
-                objectFit: "contain",
-                borderRadius: 4,
-                touchAction: "pinch-zoom",
-              }}
-              onClick={(e) => e.stopPropagation()}
-            />
+            <ZoomableImage src={note.content} />
           </div>
           {note.noteText && (
             <div style={{
