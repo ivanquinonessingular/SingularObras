@@ -1336,15 +1336,19 @@ function ImageAnnotator({ src, onSave, onCancel, saving }) {
   const colors = ["#E85D5D", "#000000", "#ffffff", "#FFD60A", "#3B82C4", "#5BAD5E"];
   const sizes = [3, 6, 12];
 
-  const drawAll = () => {
+  const drawAll = (strokesArr) => {
     const canvas = canvasRef.current;
     const img = imgRef.current;
     if (!canvas || !img) return;
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    try { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); } catch (e) { console.warn("drawImage:", e); }
+    try {
+      if (img.complete && (img.naturalWidth || img.width)) {
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      }
+    } catch (e) { console.warn("drawImage:", e); }
     const baseScale = canvas.width / 400;
-    for (const s of strokes) {
+    for (const s of strokesArr) {
       ctx.strokeStyle = s.color;
       ctx.fillStyle = s.color;
       ctx.lineWidth = s.size * baseScale;
@@ -1406,7 +1410,8 @@ function ImageAnnotator({ src, onSave, onCancel, saving }) {
     return () => { cancelled = true; };
   }, [src]);
 
-  useEffect(() => { if (status === "ready") drawAll(); }, [strokes, status]);
+  // Initial draw when image is ready (not on every stroke change!)
+  useEffect(() => { if (status === "ready") drawAll([]); }, [status]);
 
   const getPoint = (e) => {
     const canvas = canvasRef.current;
@@ -1449,10 +1454,11 @@ function ImageAnnotator({ src, onSave, onCancel, saving }) {
     if (!drawing.current) return;
     setStrokes(s => [...s, drawing.current]);
     drawing.current = null;
+    // No redraw needed — the stroke was already drawn incrementally during onMove
   };
 
-  const undo = () => setStrokes(s => s.slice(0, -1));
-  const clear = () => setStrokes([]);
+  const undo = () => { const next = strokes.slice(0, -1); setStrokes(next); drawAll(next); };
+  const clear = () => { setStrokes([]); drawAll([]); };
   const save = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -1572,7 +1578,8 @@ function ImagePicker({ notes, selected, onConfirm, onClose }) {
 /* ═══ PART (Work report) VIEW ═══ */
 function PartView({ proj, reports, notes, user, users, isA }) {
   const [show, setShow] = useState(false);
-  const [f, setF] = useState({ tasksDone: "", date: today(), hours: "8", workers: [user.uid], newImages: [], existingNoteIds: [] });
+  const [editingId, setEditingId] = useState(null); // null = create mode, id = edit mode
+  const [f, setF] = useState({ tasksDone: "", date: today(), hours: "8", workers: [user.uid], newImages: [], existingNoteIds: [], removedNoteIds: [] });
   const [picker, setPicker] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [annotIdx, setAnnotIdx] = useState(-1);
@@ -1580,8 +1587,11 @@ function PartView({ proj, reports, notes, user, users, isA }) {
   const [confirmDel, setConfirmDel] = useState(null);
   const fileRef = useRef(null);
   const camRef = useRef(null);
+  const formTopRef = useRef(null);
 
   const sorted = [...reports].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  // Treat undefined partOwned as TRUE (backward-compat: pre-existing reports' notes were uploads)
+  const isPartOwned = (n) => n.partOwned !== false;
 
   const compressImage = (file) => new Promise((resolve) => {
     const maxSize = 1600;
@@ -1635,26 +1645,78 @@ function PartView({ proj, reports, notes, user, users, isA }) {
     if (n > 15) { setF(p => ({ ...p, hours: "15" })); return; }
   };
 
-  const create = async () => {
+  const resetForm = () => {
+    f.newImages.forEach(im => URL.revokeObjectURL(im.url));
+    setF({ tasksDone: "", date: today(), hours: "8", workers: [user.uid], newImages: [], existingNoteIds: [], removedNoteIds: [] });
+    setEditingId(null);
+    setShow(false);
+  };
+
+  const startEdit = (report) => {
+    f.newImages.forEach(im => URL.revokeObjectURL(im.url));
+    setF({
+      tasksDone: report.tasksDone || "",
+      date: report.date || today(),
+      hours: String(report.hours ?? "8"),
+      workers: report.workers || [user.uid],
+      newImages: [],
+      existingNoteIds: [],
+      removedNoteIds: [],
+    });
+    setEditingId(report.id);
+    setShow(true);
+    setExpanded(null);
+    setTimeout(() => formTopRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+  };
+
+  const submit = async () => {
     if (!f.tasksDone.trim()) { alert("Describe las tareas realizadas"); return; }
     if (!f.workers.length) { alert("Selecciona al menos un trabajador"); return; }
     const parsedHours = parseFloat(String(f.hours).replace(",", "."));
     if (!parsedHours || isNaN(parsedHours) || parsedHours < 1 || parsedHours > 15) { alert("Las horas deben estar entre 1 y 15"); return; }
     setUploading(true);
     try {
-      // Defensive: filter undefined fields out
       const reportData = {
-        projectId: proj.id || "",
-        userId: user.uid || "",
-        userName: user.name || user.email || "Usuario",
         date: f.date || today(),
         tasksDone: f.tasksDone.trim(),
         hours: parsedHours,
         workers: (f.workers || []).filter(Boolean),
       };
-      const ref = await addToCollection("workReports", reportData);
-      const reportId = ref.id;
 
+      let reportId;
+      if (editingId) {
+        await updateInCollection("workReports", editingId, reportData);
+        reportId = editingId;
+      } else {
+        const ref = await addToCollection("workReports", {
+          ...reportData,
+          projectId: proj.id || "",
+          userId: user.uid || "",
+          userName: user.name || user.email || "Usuario",
+        });
+        reportId = ref.id;
+      }
+
+      // Process removed images (only relevant in edit mode)
+      for (const noteId of (f.removedNoteIds || [])) {
+        const note = notes.find(n => n.id === noteId);
+        if (!note) continue;
+        if (isPartOwned(note)) {
+          // Was uploaded for the part — delete completely
+          if (note.type === "image" && note.content) {
+            try {
+              const m = note.content.match(/\/o\/(.+?)\?/);
+              if (m) await deleteObject(storageRef(storage, decodeURIComponent(m[1])));
+            } catch {}
+          }
+          await deleteFromCollection("notes", note.id);
+        } else {
+          // Was an existing note linked — just unlink
+          await updateInCollection("notes", note.id, { workReportId: null, partOwned: null });
+        }
+      }
+
+      // Upload new images and create linked notes (partOwned: true)
       for (const img of f.newImages) {
         const path = `notes/${proj.id}/images/${uid()}_${img.file.name || "img.jpg"}`;
         const sRef = storageRef(storage, path);
@@ -1664,20 +1726,21 @@ function PartView({ proj, reports, notes, user, users, isA }) {
           projectId: proj.id,
           userId: user.uid,
           userName: user.name || user.email || "Usuario",
-          type: "image",
-          content: url,
-          noteText: img.comment || "",
+          type: "image", content: url, noteText: img.comment || "",
           workReportId: reportId,
+          partOwned: true,
         });
       }
+      // Link existing notes (partOwned: false)
       for (const noteId of f.existingNoteIds) {
-        await updateInCollection("notes", noteId, { workReportId: reportId });
+        await updateInCollection("notes", noteId, { workReportId: reportId, partOwned: false });
       }
-      await addToCollection("notifications", { message: `${user.name || "Alguien"} añadió un parte de trabajo en ${proj.name}`, projectId: proj.id, read: false });
 
-      f.newImages.forEach(im => URL.revokeObjectURL(im.url));
-      setF({ tasksDone: "", date: today(), hours: "8", workers: [user.uid], newImages: [], existingNoteIds: [] });
-      setShow(false);
+      if (!editingId) {
+        await addToCollection("notifications", { message: `${user.name || "Alguien"} añadió un parte de trabajo en ${proj.name}`, projectId: proj.id, read: false });
+      }
+
+      resetForm();
     } catch (e) { alert("Error: " + e.message); }
     setUploading(false);
   };
@@ -1686,13 +1749,18 @@ function PartView({ proj, reports, notes, user, users, isA }) {
     setConfirmDel(null);
     const linked = notes.filter(n => n.workReportId === report.id);
     for (const note of linked) {
-      if (note.type === "image" && note.content) {
-        try {
-          const m = note.content.match(/\/o\/(.+?)\?/);
-          if (m) await deleteObject(storageRef(storage, decodeURIComponent(m[1])));
-        } catch {}
+      if (isPartOwned(note)) {
+        if (note.type === "image" && note.content) {
+          try {
+            const m = note.content.match(/\/o\/(.+?)\?/);
+            if (m) await deleteObject(storageRef(storage, decodeURIComponent(m[1])));
+          } catch {}
+        }
+        await deleteFromCollection("notes", note.id);
+      } else {
+        // Existing note linked: just unlink
+        await updateInCollection("notes", note.id, { workReportId: null, partOwned: null });
       }
-      await deleteFromCollection("notes", note.id);
     }
     await deleteFromCollection("workReports", report.id);
   };
@@ -1700,9 +1768,12 @@ function PartView({ proj, reports, notes, user, users, isA }) {
   const userName = (id) => users.find(u => u.id === id)?.name || "?";
   const userColor = (id) => users.find(u => u.id === id)?.color || "#ccc";
   const existingSelected = notes.filter(n => f.existingNoteIds.includes(n.id));
+  // Currently linked images on the part being edited (not yet removed in this session)
+  const currentLinked = editingId ? notes.filter(n => n.workReportId === editingId && n.type === "image" && !f.removedNoteIds.includes(n.id)) : [];
 
   return (
     <div>
+      <div ref={formTopRef} />
       {!show && (
         <button style={{ ...S.btnP, marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }} onClick={() => setShow(true)}>
           <Ic d={P.plus} size={16} color="#fff" /> Nuevo parte
@@ -1711,6 +1782,8 @@ function PartView({ proj, reports, notes, user, users, isA }) {
 
       {show && (
         <div className="pop-in" style={{ ...S.formCard, marginBottom: 16 }}>
+          <h3 style={{ margin: "0 0 4px", fontSize: 14, color: "#333", fontWeight: 700 }}>{editingId ? "Editar parte" : "Nuevo parte"}</h3>
+
           <div>
             <label style={{ fontSize: 11, color: "#999", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".5px", display: "block", marginBottom: 4 }}>Tareas realizadas</label>
             <textarea
@@ -1765,6 +1838,23 @@ function PartView({ proj, reports, notes, user, users, isA }) {
 
           <div>
             <label style={{ fontSize: 11, color: "#999", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".5px", display: "block", marginBottom: 4 }}>Imágenes</label>
+
+            {/* Currently linked images (only in edit mode) */}
+            {currentLinked.length > 0 && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6, marginBottom: 8 }}>
+                {currentLinked.map(n => (
+                  <div key={n.id} style={{ position: "relative", aspectRatio: "1", borderRadius: 8, overflow: "hidden", border: "1px solid #eee" }}>
+                    <img src={n.content} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    <button onClick={() => setF(p => ({ ...p, removedNoteIds: [...p.removedNoteIds, n.id] }))} style={{ position: "absolute", top: 4, right: 4, width: 22, height: 22, borderRadius: 11, background: "rgba(0,0,0,.6)", border: "none", display: "flex", alignItems: "center", justifyContent: "center" }} title="Quitar del parte">
+                      <Ic d={P.x} size={11} color="#fff" />
+                    </button>
+                    <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, background: "linear-gradient(to top, rgba(0,0,0,.7), transparent)", padding: "10px 6px 4px", fontSize: 9, color: "#fff", textAlign: "center" }}>{isPartOwned(n) ? "Subida" : "De Notas"}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* New uploads */}
             {f.newImages.length > 0 && (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8, marginBottom: 8 }}>
                 {f.newImages.map((img, idx) => (
@@ -1812,8 +1902,8 @@ function PartView({ proj, reports, notes, user, users, isA }) {
           </div>
 
           <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-            <button style={S.btnP} onClick={create} disabled={uploading}>{uploading ? "Guardando..." : "Crear parte"}</button>
-            <button style={S.btnG} onClick={() => { f.newImages.forEach(im => URL.revokeObjectURL(im.url)); setF({ tasksDone: "", date: today(), hours: "8", workers: [user.uid], newImages: [], existingNoteIds: [] }); setShow(false); }} disabled={uploading}>Cancelar</button>
+            <button style={S.btnP} onClick={submit} disabled={uploading}>{uploading ? "Guardando..." : (editingId ? "Guardar cambios" : "Crear parte")}</button>
+            <button style={S.btnG} onClick={resetForm} disabled={uploading}>Cancelar</button>
           </div>
         </div>
       )}
@@ -1884,9 +1974,14 @@ function PartView({ proj, reports, notes, user, users, isA }) {
                       </div>
                     </div>
                   ) : (
-                    <button style={{ ...S.btnG, padding: "8px", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, color: "#E85D5D" }} onClick={() => setConfirmDel(r.id)}>
-                      <Ic d={P.trash} size={13} color="#E85D5D" /> Eliminar parte
-                    </button>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button style={{ ...S.btnG, flex: 1, padding: "8px", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, color: "#E8853A" }} onClick={() => startEdit(r)}>
+                        <Ic d={P.edit} size={13} color="#E8853A" /> Editar
+                      </button>
+                      <button style={{ ...S.btnG, flex: 1, padding: "8px", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, color: "#E85D5D" }} onClick={() => setConfirmDel(r.id)}>
+                        <Ic d={P.trash} size={13} color="#E85D5D" /> Eliminar
+                      </button>
+                    </div>
                   )
                 )}
               </div>
