@@ -44,6 +44,9 @@ const P = {
   home:"M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z",
   team:"M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 3a4 4 0 100 8 4 4 0 000-8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75",
   alert:"M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z",
+  clip:"M9 2h6a1 1 0 011 1v2h2a2 2 0 012 2v13a2 2 0 01-2 2H6a2 2 0 01-2-2V7a2 2 0 012-2h2V3a1 1 0 011-1zM9 4v2h6V4M8 11h8M8 15h8M8 19h5",
+  brush:"M9.06 11.9l8.07-8.06a2.85 2.85 0 014.03 4.03l-8.06 8.08M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-1.16 2.07-2 2.05.99 1.27 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 00-3-3.05z",
+  undo:"M3 7v6h6M3.51 13a9 9 0 1014.85-3.36L3 13",
 };
 
 const COLORS = [
@@ -160,6 +163,7 @@ export default function App() {
   const notifications = useCollection("notifications", loggedIn);
   const plans = useCollection("plans", loggedIn);
   const users = useCollection("users", loggedIn);
+  const workReports = useCollection("workReports", loggedIn);
 
   if (authLoading) return <div style={S.loadWrap}><div style={S.loadIcon}>S</div><p style={{color:"#888",marginTop:10}}>Cargando...</p></div>;
   if (!user) return <Login />;
@@ -237,7 +241,7 @@ export default function App() {
             </div>
           </div>
           <div style={S.content}>
-            <ProjView proj={proj} tasks={tasks} shoppingLists={shoppingLists} notes={notes} plans={plans} isA={isA} user={user} tab={tab} setTab={setTab} users={users} goBack={closeProject} exportRef={exportRef} />
+            <ProjView proj={proj} tasks={tasks} shoppingLists={shoppingLists} notes={notes} plans={plans} workReports={workReports} isA={isA} user={user} tab={tab} setTab={setTab} users={users} goBack={closeProject} exportRef={exportRef} />
           </div>
         </div>
       )}
@@ -564,14 +568,15 @@ function TeamView({ users }) {
 }
 
 /* ═══ PROJECT VIEW ═══ */
-function ProjView({ proj, tasks, shoppingLists, notes, plans, isA, user, tab, setTab, users, goBack, exportRef }) {
+function ProjView({ proj, tasks, shoppingLists, notes, plans, workReports, isA, user, tab, setTab, users, goBack, exportRef }) {
   const [confirmFinish, setConfirmFinish] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const tabs = [{ id: "tasks", label: "Tareas", icon: P.task }, { id: "shopping", label: "Compras", icon: P.cart }, { id: "notes", label: "Notas", icon: P.note }, { id: "plans", label: "Planos", icon: P.plan }];
+  const tabs = [{ id: "tasks", label: "Tareas", icon: P.task }, { id: "work", label: "Parte", icon: P.clip }, { id: "shopping", label: "Compras", icon: P.cart }, { id: "notes", label: "Notas", icon: P.note }, { id: "plans", label: "Planos", icon: P.plan }];
   const projTasks = tasks.filter(t => t.projectId === proj.id);
   const projLists = shoppingLists.filter(s => s.projectId === proj.id);
   const projNotes = notes.filter(n => n.projectId === proj.id);
   const projPlans = plans.filter(p => p.projectId === proj.id);
+  const projReports = workReports.filter(r => r.projectId === proj.id);
 
   const finishProject = async () => {
     await updateInCollection("projects", proj.id, { finished: true, finishedAt: nowISO() });
@@ -860,6 +865,7 @@ function ProjView({ proj, tasks, shoppingLists, notes, plans, isA, user, tab, se
       {exporting && <div style={{ fontSize: 12, color: "#E8853A", fontWeight: 600, marginBottom: 10, textAlign: "center" }}>Generando PDF...</div>}
       <div key={tab} className="tab-in">
         {tab === "tasks" && <TasksView proj={proj} tasks={projTasks} isA={isA} user={user} users={users} />}
+        {tab === "work" && <PartView proj={proj} reports={projReports} notes={projNotes} user={user} users={users} isA={isA} />}
         {tab === "shopping" && <ShopView proj={proj} lists={projLists} isA={isA} />}
         {tab === "notes" && <NotesView proj={proj} notes={projNotes} user={user} users={users} />}
         {tab === "plans" && <PlansView proj={proj} plans={projPlans} isA={isA} />}
@@ -1317,15 +1323,553 @@ function ZoomableImage({ src }) {
   );
 }
 
+/* ═══ IMAGE ANNOTATOR (draw on top of an image) ═══ */
+function ImageAnnotator({ src, onSave, onCancel, saving }) {
+  const canvasRef = useRef(null);
+  const imgRef = useRef(null);
+  const [strokes, setStrokes] = useState([]);
+  const drawing = useRef(null);
+  const [color, setColor] = useState("#E85D5D");
+  const [size, setSize] = useState(6);
+  const [imgLoaded, setImgLoaded] = useState(false);
+  const [localSrc, setLocalSrc] = useState(null);
+
+  const colors = ["#E85D5D", "#000000", "#ffffff", "#FFD60A", "#3B82C4", "#5BAD5E"];
+  const sizes = [3, 6, 12];
+
+  // Fetch the image as blob to avoid tainted-canvas (CORS) issues with Firebase URLs
+  useEffect(() => {
+    let revoke = null;
+    fetch(src).then(r => r.blob()).then(b => { const u = URL.createObjectURL(b); revoke = u; setLocalSrc(u); }).catch(() => setLocalSrc(src));
+    return () => { if (revoke) URL.revokeObjectURL(revoke); };
+  }, [src]);
+
+  const redraw = () => {
+    const canvas = canvasRef.current;
+    const img = imgRef.current;
+    if (!canvas || !img || !img.complete || !img.naturalWidth) return;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const baseScale = canvas.width / 400;
+    for (const s of strokes) {
+      ctx.strokeStyle = s.color;
+      ctx.fillStyle = s.color;
+      ctx.lineWidth = s.size * baseScale;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      const pts = s.points;
+      if (pts.length === 1) {
+        ctx.beginPath();
+        ctx.arc(pts[0].x, pts[0].y, (s.size * baseScale) / 2, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+        ctx.stroke();
+      }
+    }
+  };
+
+  const onImgLoad = () => {
+    const canvas = canvasRef.current;
+    const img = imgRef.current;
+    if (!canvas || !img) return;
+    canvas.width = img.naturalWidth || 800;
+    canvas.height = img.naturalHeight || 600;
+    setImgLoaded(true);
+    setTimeout(redraw, 0);
+  };
+
+  useEffect(() => { redraw(); }, [strokes]);
+
+  const getPoint = (e) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const sx = canvas.width / rect.width;
+    const sy = canvas.height / rect.height;
+    const cx = e.touches ? e.touches[0].clientX : e.clientX;
+    const cy = e.touches ? e.touches[0].clientY : e.clientY;
+    return { x: (cx - rect.left) * sx, y: (cy - rect.top) * sy };
+  };
+
+  const onStart = (e) => {
+    if (saving) return;
+    e.preventDefault();
+    const p = getPoint(e);
+    if (!p) return;
+    drawing.current = { color, size, points: [p] };
+  };
+  const onMove = (e) => {
+    if (!drawing.current) return;
+    e.preventDefault();
+    const p = getPoint(e);
+    if (!p) return;
+    drawing.current.points.push(p);
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    const pts = drawing.current.points;
+    if (pts.length < 2) return;
+    const baseScale = canvas.width / 400;
+    ctx.strokeStyle = drawing.current.color;
+    ctx.lineWidth = drawing.current.size * baseScale;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(pts[pts.length - 2].x, pts[pts.length - 2].y);
+    ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+    ctx.stroke();
+  };
+  const onEnd = () => {
+    if (!drawing.current) return;
+    setStrokes(s => [...s, drawing.current]);
+    drawing.current = null;
+  };
+
+  const undo = () => setStrokes(s => s.slice(0, -1));
+  const clear = () => setStrokes([]);
+  const save = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.toBlob((blob) => { if (blob) onSave(blob); else alert("Error al exportar la imagen"); }, "image/jpeg", 0.85);
+  };
+
+  return (
+    <div className="ov-in" style={{ position: "fixed", inset: 0, zIndex: 10000, background: "#000", display: "flex", flexDirection: "column" }}>
+      {localSrc && <img ref={imgRef} src={localSrc} onLoad={onImgLoad} alt="" style={{ display: "none" }} />}
+
+      <div style={{ padding: "max(12px, env(safe-area-inset-top, 0px)) 12px 8px", display: "flex", alignItems: "center", gap: 8 }}>
+        <button onClick={onCancel} disabled={saving} style={{ padding: "8px 14px", borderRadius: 12, color: "#fff", background: "rgba(255,255,255,.15)", border: "none", fontSize: 13, fontWeight: 600 }}>Cancelar</button>
+        <div style={{ flex: 1 }} />
+        <button onClick={undo} disabled={!strokes.length || saving} style={{ width: 38, height: 38, borderRadius: 19, background: "rgba(255,255,255,.15)", border: "none", display: "flex", alignItems: "center", justifyContent: "center" }} title="Deshacer">
+          <Ic d={P.undo} size={18} color={strokes.length ? "#fff" : "#666"} />
+        </button>
+        <button onClick={clear} disabled={!strokes.length || saving} style={{ width: 38, height: 38, borderRadius: 19, background: "rgba(255,255,255,.15)", border: "none", display: "flex", alignItems: "center", justifyContent: "center" }} title="Limpiar todo">
+          <Ic d={P.trash} size={16} color={strokes.length ? "#fff" : "#666"} />
+        </button>
+        <button onClick={save} disabled={saving} style={{ ...S.btnP, padding: "8px 18px" }}>{saving ? "..." : "Guardar"}</button>
+      </div>
+
+      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", padding: 8 }}>
+        {!imgLoaded && <div style={{ color: "#fff", fontSize: 13 }}>Cargando imagen...</div>}
+        <canvas
+          ref={canvasRef}
+          onTouchStart={onStart} onTouchMove={onMove} onTouchEnd={onEnd} onTouchCancel={onEnd}
+          onMouseDown={onStart} onMouseMove={(e) => drawing.current && onMove(e)} onMouseUp={onEnd} onMouseLeave={onEnd}
+          style={{ maxWidth: "100%", maxHeight: "100%", touchAction: "none", cursor: "crosshair", display: imgLoaded ? "block" : "none", background: "#1a1a1a" }}
+        />
+      </div>
+
+      <div style={{ padding: "10px 12px max(10px, env(safe-area-inset-bottom, 0px))" }}>
+        <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 10 }}>
+          {colors.map(c => (
+            <button key={c} onClick={() => setColor(c)} style={{
+              width: 32, height: 32, borderRadius: 16, background: c,
+              border: color === c ? "3px solid #fff" : "2px solid rgba(255,255,255,.25)",
+              padding: 0, cursor: "pointer"
+            }} />
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 14, justifyContent: "center" }}>
+          {sizes.map(sz => (
+            <button key={sz} onClick={() => setSize(sz)} style={{
+              width: 38, height: 38, borderRadius: 19,
+              background: size === sz ? "rgba(255,255,255,.22)" : "transparent",
+              border: "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer"
+            }}>
+              <div style={{ width: sz + 6, height: sz + 6, borderRadius: "50%", background: color, border: color === "#ffffff" ? "1px solid #888" : "none" }} />
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══ IMAGE PICKER (select existing image notes) ═══ */
+function ImagePicker({ notes, selected, onConfirm, onClose }) {
+  const [sel, setSel] = useState(new Set(selected || []));
+  const toggle = (id) => { const n = new Set(sel); if (n.has(id)) n.delete(id); else n.add(id); setSel(n); };
+  const available = notes.filter(n => n.type === "image" && !n.workReportId);
+
+  return (
+    <div className="ov-in" style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "flex-end" }} onClick={onClose}>
+      <div className="sheet-in" style={{ background: "#fff", width: "100%", maxHeight: "85vh", borderRadius: "24px 24px 0 0", display: "flex", flexDirection: "column" }} onClick={e => e.stopPropagation()}>
+        <div style={{ padding: "16px 18px 10px", borderBottom: "1px solid #eee", display: "flex", alignItems: "center" }}>
+          <div style={{ width: 36, height: 4, borderRadius: 2, background: "#ddd", position: "absolute", left: "50%", top: 8, transform: "translateX(-50%)" }} />
+          <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700, flex: 1 }}>Imágenes en notas</h3>
+          <button style={S.iconBtn} onClick={onClose}><Ic d={P.x} size={16} color="#888" /></button>
+        </div>
+        <div style={{ flex: 1, overflow: "auto", padding: 12 }}>
+          {available.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 40, color: "#aaa", fontSize: 13 }}>No hay imágenes disponibles<br /><span style={{ fontSize: 11 }}>(las imágenes ya en otro parte no se pueden reutilizar)</span></div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+              {available.map(n => {
+                const isSel = sel.has(n.id);
+                return (
+                  <div key={n.id} className="tappable" onClick={() => toggle(n.id)} style={{
+                    position: "relative", aspectRatio: "1", borderRadius: 10, overflow: "hidden",
+                    border: isSel ? "3px solid #E8853A" : "2px solid transparent", cursor: "pointer"
+                  }}>
+                    <img src={n.content} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    {isSel && (
+                      <div style={{ position: "absolute", top: 4, right: 4, width: 22, height: 22, borderRadius: 11, background: "#E8853A", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <Ic d={P.check} size={12} color="#fff" />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        <div style={{ padding: "10px 16px max(14px, env(safe-area-inset-bottom, 0px))", borderTop: "1px solid #eee", display: "flex", gap: 8 }}>
+          <button style={S.btnG} onClick={onClose}>Cancelar</button>
+          <button style={S.btnP} onClick={() => onConfirm([...sel])}>Añadir ({sel.size})</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══ PART (Work report) VIEW ═══ */
+function PartView({ proj, reports, notes, user, users, isA }) {
+  const [show, setShow] = useState(false);
+  const [f, setF] = useState({ tasksDone: "", date: today(), hours: 8, workers: [user.uid], newImages: [], existingNoteIds: [] });
+  const [picker, setPicker] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [annotIdx, setAnnotIdx] = useState(-1);
+  const [expanded, setExpanded] = useState(null);
+  const [confirmDel, setConfirmDel] = useState(null);
+  const fileRef = useRef(null);
+  const camRef = useRef(null);
+
+  const sorted = [...reports].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+  const compressImage = (file) => new Promise((resolve) => {
+    const maxSize = 1600;
+    const img = new Image();
+    img.onload = () => {
+      let w = img.width, h = img.height;
+      if (w > maxSize || h > maxSize) {
+        if (w > h) { h = Math.round(h * maxSize / w); w = maxSize; }
+        else { w = Math.round(w * maxSize / h); h = maxSize; }
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      canvas.toBlob((blob) => resolve(new File([blob], file.name || "photo.jpg", { type: "image/jpeg" })), "image/jpeg", 0.7);
+    };
+    img.onerror = () => resolve(file);
+    img.src = URL.createObjectURL(file);
+  });
+
+  const onPickFiles = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    const newOnes = [];
+    for (const file of files) {
+      const compressed = await compressImage(file);
+      newOnes.push({ file: compressed, comment: "", url: URL.createObjectURL(compressed) });
+    }
+    setF(prev => ({ ...prev, newImages: [...prev.newImages, ...newOnes] }));
+    e.target.value = "";
+  };
+
+  const removeNew = (idx) => setF(prev => { const arr = [...prev.newImages]; URL.revokeObjectURL(arr[idx]?.url); arr.splice(idx, 1); return { ...prev, newImages: arr }; });
+  const updateComment = (idx, val) => setF(prev => { const arr = [...prev.newImages]; arr[idx] = { ...arr[idx], comment: val }; return { ...prev, newImages: arr }; });
+  const replaceWithAnnotated = async (idx, blob) => {
+    const newFile = new File([blob], "annotated.jpg", { type: "image/jpeg" });
+    setF(prev => {
+      const arr = [...prev.newImages];
+      URL.revokeObjectURL(arr[idx]?.url);
+      arr[idx] = { ...arr[idx], file: newFile, url: URL.createObjectURL(newFile) };
+      return { ...prev, newImages: arr };
+    });
+    setAnnotIdx(-1);
+  };
+
+  const toggleWorker = (uid2) => setF(prev => prev.workers.includes(uid2) ? { ...prev, workers: prev.workers.filter(x => x !== uid2) } : { ...prev, workers: [...prev.workers, uid2] });
+
+  const create = async () => {
+    if (!f.tasksDone.trim()) { alert("Describe las tareas realizadas"); return; }
+    if (!f.workers.length) { alert("Selecciona al menos un trabajador"); return; }
+    setUploading(true);
+    try {
+      const ref = await addToCollection("workReports", {
+        projectId: proj.id, userId: user.uid, userName: user.name,
+        date: f.date, tasksDone: f.tasksDone.trim(), hours: Number(f.hours), workers: f.workers,
+      });
+      const reportId = ref.id;
+
+      for (const img of f.newImages) {
+        const path = `notes/${proj.id}/images/${uid()}_${img.file.name || "img.jpg"}`;
+        const sRef = storageRef(storage, path);
+        await uploadBytes(sRef, img.file);
+        const url = await getDownloadURL(sRef);
+        await addToCollection("notes", {
+          projectId: proj.id, userId: user.uid, userName: user.name,
+          type: "image", content: url, noteText: img.comment || "",
+          workReportId: reportId,
+        });
+      }
+      for (const noteId of f.existingNoteIds) {
+        await updateInCollection("notes", noteId, { workReportId: reportId });
+      }
+      await addToCollection("notifications", { message: `${user.name} añadió un parte de trabajo en ${proj.name}`, projectId: proj.id, read: false });
+
+      // Cleanup blob URLs
+      f.newImages.forEach(im => URL.revokeObjectURL(im.url));
+      setF({ tasksDone: "", date: today(), hours: 8, workers: [user.uid], newImages: [], existingNoteIds: [] });
+      setShow(false);
+    } catch (e) { alert("Error: " + e.message); }
+    setUploading(false);
+  };
+
+  const deleteReport = async (report) => {
+    setConfirmDel(null);
+    const linked = notes.filter(n => n.workReportId === report.id);
+    for (const note of linked) {
+      if (note.type === "image" && note.content) {
+        try {
+          const m = note.content.match(/\/o\/(.+?)\?/);
+          if (m) await deleteObject(storageRef(storage, decodeURIComponent(m[1])));
+        } catch {}
+      }
+      await deleteFromCollection("notes", note.id);
+    }
+    await deleteFromCollection("workReports", report.id);
+  };
+
+  const userName = (id) => users.find(u => u.uid === id)?.name || "?";
+  const userColor = (id) => users.find(u => u.uid === id)?.color || "#ccc";
+  const existingSelected = notes.filter(n => f.existingNoteIds.includes(n.id));
+
+  return (
+    <div>
+      {!show && (
+        <button style={{ ...S.btnP, marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }} onClick={() => setShow(true)}>
+          <Ic d={P.plus} size={16} color="#fff" /> Nuevo parte
+        </button>
+      )}
+
+      {show && (
+        <div className="pop-in" style={{ ...S.formCard, marginBottom: 16 }}>
+          <div>
+            <label style={{ fontSize: 11, color: "#999", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".5px", display: "block", marginBottom: 4 }}>Tareas realizadas</label>
+            <textarea
+              style={{ ...S.inp, minHeight: 90, resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }}
+              placeholder="Describe el trabajo realizado..."
+              value={f.tasksDone}
+              onChange={e => setF({ ...f, tasksDone: e.target.value })}
+            />
+          </div>
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ flex: 1 }}>
+              <label style={{ fontSize: 11, color: "#999", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".5px", display: "block", marginBottom: 4 }}>Fecha</label>
+              <input style={S.inp} type="date" value={f.date} onChange={e => setF({ ...f, date: e.target.value })} />
+            </div>
+            <div style={{ width: 110 }}>
+              <label style={{ fontSize: 11, color: "#999", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".5px", display: "block", marginBottom: 4 }}>Horas</label>
+              <input style={S.inp} type="number" min={1} max={15} step={0.5} value={f.hours} onChange={e => setF({ ...f, hours: Math.max(1, Math.min(15, Number(e.target.value) || 1)) })} />
+            </div>
+          </div>
+
+          <div>
+            <label style={{ fontSize: 11, color: "#999", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".5px", display: "block", marginBottom: 4 }}>Equipo trabajando</label>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {users.map(u => {
+                const on = f.workers.includes(u.uid);
+                return (
+                  <button key={u.uid} type="button" onClick={() => toggleWorker(u.uid)} style={{
+                    display: "flex", alignItems: "center", gap: 6,
+                    padding: "6px 12px", borderRadius: 16, fontSize: 12, fontWeight: 600,
+                    border: on ? "2px solid #E8853A" : "1px solid #ddd",
+                    background: on ? "#FFF4EC" : "#fff", color: on ? "#E8853A" : "#666", cursor: "pointer"
+                  }}>
+                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: u.color || "#ccc" }} />
+                    {u.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <label style={{ fontSize: 11, color: "#999", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".5px", display: "block", marginBottom: 4 }}>Imágenes</label>
+            {f.newImages.length > 0 && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8, marginBottom: 8 }}>
+                {f.newImages.map((img, idx) => (
+                  <div key={idx} style={{ background: "#f8f8f8", borderRadius: 10, padding: 6, position: "relative" }}>
+                    <div style={{ position: "relative" }}>
+                      <img src={img.url} alt="" style={{ width: "100%", aspectRatio: "1", objectFit: "cover", borderRadius: 6 }} />
+                      <button onClick={() => removeNew(idx)} style={{ position: "absolute", top: 4, right: 4, width: 24, height: 24, borderRadius: 12, background: "rgba(0,0,0,.6)", border: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <Ic d={P.x} size={12} color="#fff" />
+                      </button>
+                      <button onClick={() => setAnnotIdx(idx)} style={{ position: "absolute", bottom: 4, right: 4, width: 28, height: 28, borderRadius: 14, background: "rgba(232,133,58,.9)", border: "none", display: "flex", alignItems: "center", justifyContent: "center" }} title="Dibujar">
+                        <Ic d={P.brush} size={14} color="#fff" />
+                      </button>
+                    </div>
+                    <input style={{ ...S.inp, marginTop: 4, padding: "6px 8px", fontSize: 12 }} placeholder="Comentario..." value={img.comment} onChange={e => updateComment(idx, e.target.value)} />
+                  </div>
+                ))}
+              </div>
+            )}
+            {existingSelected.length > 0 && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6, marginBottom: 8 }}>
+                {existingSelected.map(n => (
+                  <div key={n.id} style={{ position: "relative", aspectRatio: "1", borderRadius: 8, overflow: "hidden" }}>
+                    <img src={n.content} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    <button onClick={() => setF(p => ({ ...p, existingNoteIds: p.existingNoteIds.filter(x => x !== n.id) }))} style={{ position: "absolute", top: 4, right: 4, width: 22, height: 22, borderRadius: 11, background: "rgba(0,0,0,.6)", border: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <Ic d={P.x} size={11} color="#fff" />
+                    </button>
+                    <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, background: "linear-gradient(to top, rgba(0,0,0,.7), transparent)", padding: "10px 6px 4px", fontSize: 9, color: "#fff", textAlign: "center" }}>De Notas</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <input ref={camRef} type="file" accept="image/*" capture="environment" multiple style={{ display: "none" }} onChange={onPickFiles} />
+              <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={onPickFiles} />
+              <button style={{ ...S.btnG, flex: 1, minWidth: 90, padding: "10px", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }} onClick={() => camRef.current?.click()}>
+                <Ic d={P.cam} size={14} color="#666" /> Cámara
+              </button>
+              <button style={{ ...S.btnG, flex: 1, minWidth: 90, padding: "10px", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }} onClick={() => fileRef.current?.click()}>
+                <Ic d={P.img} size={14} color="#666" /> Galería
+              </button>
+              <button style={{ ...S.btnG, flex: 1, minWidth: 90, padding: "10px", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }} onClick={() => setPicker(true)}>
+                <Ic d={P.note} size={14} color="#666" /> De Notas
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+            <button style={S.btnP} onClick={create} disabled={uploading}>{uploading ? "Guardando..." : "Crear parte"}</button>
+            <button style={S.btnG} onClick={() => { f.newImages.forEach(im => URL.revokeObjectURL(im.url)); setF({ tasksDone: "", date: today(), hours: 8, workers: [user.uid], newImages: [], existingNoteIds: [] }); setShow(false); }} disabled={uploading}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {sorted.length === 0 && !show && (
+        <div style={S.empty}><Ic d={P.clip} size={48} color="#ddd" /><p style={{ color: "#aaa", marginTop: 12 }}>Aún no hay partes de trabajo</p></div>
+      )}
+
+      {sorted.map(r => {
+        const linkedImgs = notes.filter(n => n.workReportId === r.id && n.type === "image");
+        const open = expanded === r.id;
+        const canDelete = isA || r.userId === user.uid;
+        return (
+          <div key={r.id} style={{ ...S.formCard, marginBottom: 10, padding: 0, overflow: "hidden" }}>
+            <div className="tappable" style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }} onClick={() => setExpanded(open ? null : r.id)}>
+              <div style={{ width: 4, height: 36, borderRadius: 2, background: userColor(r.userId) }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14, color: "#333" }}>{fmtDate(r.date)} · {r.hours}h</div>
+                <div style={{ fontSize: 12, color: "#888", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.tasksDone}</div>
+              </div>
+              <div style={{ display: "flex", gap: -4 }}>
+                {(r.workers || []).slice(0, 3).map((wid, i) => (
+                  <div key={wid} title={userName(wid)} style={{ width: 22, height: 22, borderRadius: 11, background: userColor(wid), border: "2px solid #fff", marginLeft: i ? -6 : 0, fontSize: 10, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700 }}>{userName(wid).charAt(0).toUpperCase()}</div>
+                ))}
+                {(r.workers || []).length > 3 && <div style={{ fontSize: 10, color: "#888", marginLeft: 4, alignSelf: "center" }}>+{r.workers.length - 3}</div>}
+              </div>
+              <Ic d={P.chev} size={14} color="#aaa" />
+            </div>
+
+            {open && (
+              <div className="pop-in" style={{ borderTop: "1px solid #eee", padding: "12px 14px", background: "#fafafa" }}>
+                <div style={{ fontSize: 11, color: "#999", marginBottom: 4 }}>CREADO POR</div>
+                <div style={{ fontSize: 13, color: "#555", marginBottom: 12 }}>{r.userName}</div>
+
+                <div style={{ fontSize: 11, color: "#999", marginBottom: 4 }}>TAREAS REALIZADAS</div>
+                <div style={{ fontSize: 13, color: "#444", marginBottom: 12, whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{r.tasksDone}</div>
+
+                <div style={{ fontSize: 11, color: "#999", marginBottom: 4 }}>EQUIPO</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 12 }}>
+                  {(r.workers || []).map(wid => (
+                    <span key={wid} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 9px", borderRadius: 12, background: "#fff", border: "1px solid #eee", fontSize: 11 }}>
+                      <span style={{ width: 6, height: 6, borderRadius: "50%", background: userColor(wid) }} />
+                      {userName(wid)}
+                    </span>
+                  ))}
+                </div>
+
+                {linkedImgs.length > 0 && (
+                  <>
+                    <div style={{ fontSize: 11, color: "#999", marginBottom: 4 }}>IMÁGENES ({linkedImgs.length})</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6, marginBottom: 12 }}>
+                      {linkedImgs.map(n => (
+                        <a key={n.id} href={n.content} target="_blank" rel="noopener noreferrer" style={{ aspectRatio: "1", borderRadius: 8, overflow: "hidden", display: "block" }}>
+                          <img src={n.content} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                        </a>
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                {canDelete && (
+                  confirmDel === r.id ? (
+                    <div className="pop-in" style={{ background: "#fff", borderRadius: 10, padding: 10, border: "1px solid #ffd6d6" }}>
+                      <p style={{ margin: "0 0 8px", fontSize: 12, color: "#555" }}>¿Eliminar parte y sus {linkedImgs.length} imágen{linkedImgs.length !== 1 ? "es" : ""}?</p>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button style={{ ...S.btnP, background: "#E85D5D", padding: "8px" }} onClick={() => deleteReport(r)}>Eliminar</button>
+                        <button style={{ ...S.btnG, padding: "8px" }} onClick={() => setConfirmDel(null)}>Cancelar</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button style={{ ...S.btnG, padding: "8px", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, color: "#E85D5D" }} onClick={() => setConfirmDel(r.id)}>
+                      <Ic d={P.trash} size={13} color="#E85D5D" /> Eliminar parte
+                    </button>
+                  )
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {picker && <ImagePicker notes={notes} selected={f.existingNoteIds} onClose={() => setPicker(false)} onConfirm={(ids) => { setF(prev => ({ ...prev, existingNoteIds: ids })); setPicker(false); }} />}
+      {annotIdx >= 0 && f.newImages[annotIdx] && (
+        <ImageAnnotator src={f.newImages[annotIdx].url} saving={false} onCancel={() => setAnnotIdx(-1)} onSave={(blob) => replaceWithAnnotated(annotIdx, blob)} />
+      )}
+    </div>
+  );
+}
+
 /* ═══ NOTE CARD (with editable comment for images) ═══ */
 function NoteCard({ note, user, onDelete }) {
   const [editing, setEditing] = useState(false);
   const [comment, setComment] = useState(note.noteText || "");
   const [fullscreen, setFullscreen] = useState(false);
+  const [annotating, setAnnotating] = useState(false);
+  const [savingDraw, setSavingDraw] = useState(false);
+  const linked = !!note.workReportId;
 
   const saveComment = async () => {
     await updateInCollection("notes", note.id, { noteText: comment.trim() });
     setEditing(false);
+  };
+
+  const saveDrawing = async (blob) => {
+    setSavingDraw(true);
+    try {
+      // Delete old image, upload new annotated one
+      try {
+        const oldUrl = note.content;
+        const m = oldUrl.match(/\/o\/(.+?)\?/);
+        if (m) await deleteObject(storageRef(storage, decodeURIComponent(m[1])));
+      } catch {}
+      const path = `notes/${note.projectId}/images/${uid()}_annotated.jpg`;
+      const sRef = storageRef(storage, path);
+      await uploadBytes(sRef, blob);
+      const url = await getDownloadURL(sRef);
+      await updateInCollection("notes", note.id, { content: url });
+      setAnnotating(false);
+    } catch (e) { alert("Error guardando: " + e.message); }
+    setSavingDraw(false);
   };
 
   return (
@@ -1334,7 +1878,8 @@ function NoteCard({ note, user, onDelete }) {
         <div style={{ width: 6, height: 6, borderRadius: "50%", background: user?.color || "#ccc" }} />
         <span style={{ fontWeight: 700, fontSize: 12, color: "#333" }}>{note.userName || "?"}</span>
         <span style={{ fontSize: 11, color: "#bbb" }}>{note.createdAt ? fmtDT(note.createdAt.toDate?.().toISOString() || "") : ""}</span>
-        <button style={{ ...S.iconBtn, marginLeft: "auto" }} onClick={onDelete}><Ic d={P.trash} size={12} color="#ccc" /></button>
+        {linked && <span style={{ fontSize: 10, color: "#E8853A", background: "#FFF4EC", padding: "2px 7px", borderRadius: 8, fontWeight: 700 }}>📋 Parte</span>}
+        {!linked && <button style={{ ...S.iconBtn, marginLeft: "auto" }} onClick={onDelete}><Ic d={P.trash} size={12} color="#ccc" /></button>}
       </div>
       <div style={{ padding: "10px 14px" }}>
         {note.type === "text" && <p style={{ margin: 0, color: "#444", fontSize: 14, lineHeight: 1.6 }}>{note.content}</p>}
@@ -1366,6 +1911,9 @@ function NoteCard({ note, user, onDelete }) {
                 ) : (
                   <span style={{ color: "#bbb", fontSize: 12, flex: 1 }}>Sin comentario</span>
                 )}
+                <button style={S.iconBtn} onClick={() => setAnnotating(true)} title="Dibujar sobre la imagen">
+                  <Ic d={P.brush} size={13} color="#E8853A" />
+                </button>
                 <button style={S.iconBtn} onClick={() => { setComment(note.noteText || ""); setEditing(true); }}>
                   <Ic d={P.edit} size={13} color="#ccc" />
                 </button>
@@ -1428,6 +1976,9 @@ function NoteCard({ note, user, onDelete }) {
             </div>
           )}
         </div>
+      )}
+      {annotating && (
+        <ImageAnnotator src={note.content} saving={savingDraw} onCancel={() => setAnnotating(false)} onSave={saveDrawing} />
       )}
     </div>
   );
