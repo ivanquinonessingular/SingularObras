@@ -1483,7 +1483,6 @@ function ImageAnnotator({ src, onSave, onCancel, saving }) {
         <button onClick={clear} disabled={!strokes.length || saving} style={{ width: 38, height: 38, borderRadius: 19, background: "rgba(255,255,255,.15)", border: "none", display: "flex", alignItems: "center", justifyContent: "center" }} title="Limpiar todo">
           <Ic d={P.trash} size={16} color={strokes.length ? "#fff" : "#666"} />
         </button>
-        <button onClick={save} disabled={saving || status !== "ready"} style={{ ...S.btnP, padding: "8px 18px", opacity: (saving || status !== "ready") ? 0.5 : 1 }}>{saving ? "..." : "Guardar"}</button>
       </div>
 
       <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", padding: 8 }}>
@@ -1512,7 +1511,7 @@ function ImageAnnotator({ src, onSave, onCancel, saving }) {
             }} />
           ))}
         </div>
-        <div style={{ display: "flex", gap: 14, justifyContent: "center" }}>
+        <div style={{ display: "flex", gap: 14, justifyContent: "center", marginBottom: 12 }}>
           {sizes.map(sz => (
             <button key={sz} onClick={() => setSize(sz)} style={{
               width: 38, height: 38, borderRadius: 19,
@@ -1523,6 +1522,19 @@ function ImageAnnotator({ src, onSave, onCancel, saving }) {
             </button>
           ))}
         </div>
+        <button onClick={save} disabled={saving || status !== "ready"} style={{
+          width: "100%", padding: "14px",
+          borderRadius: 14,
+          background: "#E8853A", color: "#fff",
+          border: "none", fontSize: 16, fontWeight: 700,
+          cursor: "pointer",
+          opacity: (saving || status !== "ready") ? 0.55 : 1,
+          display: "flex", alignItems: "center", justifyContent: "center", gap: 8
+        }}>
+          {saving ? "Guardando..." : (<>
+            <Ic d={P.check} size={18} color="#fff" /> Guardar dibujo
+          </>)}
+        </button>
       </div>
     </div>
   );
