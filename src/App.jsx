@@ -1331,40 +1331,30 @@ function ImageAnnotator({ src, onSave, onCancel, saving }) {
   const drawing = useRef(null);
   const [color, setColor] = useState("#E85D5D");
   const [size, setSize] = useState(6);
-  const [imgLoaded, setImgLoaded] = useState(false);
-  const [localSrc, setLocalSrc] = useState(null);
+  const [status, setStatus] = useState("loading"); // loading | ready | error
 
   const colors = ["#E85D5D", "#000000", "#ffffff", "#FFD60A", "#3B82C4", "#5BAD5E"];
   const sizes = [3, 6, 12];
 
-  // Fetch the image as blob to avoid tainted-canvas (CORS) issues with Firebase URLs
-  useEffect(() => {
-    let revoke = null;
-    fetch(src).then(r => r.blob()).then(b => { const u = URL.createObjectURL(b); revoke = u; setLocalSrc(u); }).catch(() => setLocalSrc(src));
-    return () => { if (revoke) URL.revokeObjectURL(revoke); };
-  }, [src]);
-
-  const redraw = () => {
+  const drawAll = () => {
     const canvas = canvasRef.current;
     const img = imgRef.current;
-    if (!canvas || !img || !img.complete || !img.naturalWidth) return;
+    if (!canvas || !img) return;
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    try { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); } catch (e) { console.warn("drawImage:", e); }
     const baseScale = canvas.width / 400;
     for (const s of strokes) {
       ctx.strokeStyle = s.color;
       ctx.fillStyle = s.color;
       ctx.lineWidth = s.size * baseScale;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
+      ctx.lineCap = "round"; ctx.lineJoin = "round";
       const pts = s.points;
+      ctx.beginPath();
       if (pts.length === 1) {
-        ctx.beginPath();
         ctx.arc(pts[0].x, pts[0].y, (s.size * baseScale) / 2, 0, Math.PI * 2);
         ctx.fill();
       } else {
-        ctx.beginPath();
         ctx.moveTo(pts[0].x, pts[0].y);
         for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
         ctx.stroke();
@@ -1372,17 +1362,51 @@ function ImageAnnotator({ src, onSave, onCancel, saving }) {
     }
   };
 
-  const onImgLoad = () => {
-    const canvas = canvasRef.current;
-    const img = imgRef.current;
-    if (!canvas || !img) return;
-    canvas.width = img.naturalWidth || 800;
-    canvas.height = img.naturalHeight || 600;
-    setImgLoaded(true);
-    setTimeout(redraw, 0);
-  };
+  // Robust image loader with triple fallback
+  useEffect(() => {
+    let cancelled = false;
+    setStatus("loading");
 
-  useEffect(() => { redraw(); }, [strokes]);
+    const onReady = (img) => {
+      if (cancelled) return;
+      imgRef.current = img;
+      const canvas = canvasRef.current;
+      if (canvas) {
+        canvas.width = img.naturalWidth || img.width || 800;
+        canvas.height = img.naturalHeight || img.height || 600;
+      }
+      setStatus("ready");
+    };
+
+    const tryDirect = (withCORS) => {
+      const img = new Image();
+      if (withCORS) img.crossOrigin = "anonymous";
+      img.onload = () => onReady(img);
+      img.onerror = () => {
+        if (cancelled) return;
+        if (withCORS) tryDirect(false);
+        else setStatus("error");
+      };
+      img.src = src;
+    };
+
+    // Strategy 1: fetch + blob URL (works around CORS for canvas)
+    fetch(src)
+      .then(r => { if (!r.ok) throw new Error("fetch !ok"); return r.blob(); })
+      .then(blob => {
+        if (cancelled) return;
+        const url = URL.createObjectURL(blob);
+        const img = new Image();
+        img.onload = () => { onReady(img); /* keep URL alive while img is used */ };
+        img.onerror = () => { URL.revokeObjectURL(url); if (!cancelled) tryDirect(true); };
+        img.src = url;
+      })
+      .catch(() => { if (!cancelled) tryDirect(true); });
+
+    return () => { cancelled = true; };
+  }, [src]);
+
+  useEffect(() => { if (status === "ready") drawAll(); }, [strokes, status]);
 
   const getPoint = (e) => {
     const canvas = canvasRef.current;
@@ -1396,7 +1420,7 @@ function ImageAnnotator({ src, onSave, onCancel, saving }) {
   };
 
   const onStart = (e) => {
-    if (saving) return;
+    if (saving || status !== "ready") return;
     e.preventDefault();
     const p = getPoint(e);
     if (!p) return;
@@ -1415,8 +1439,7 @@ function ImageAnnotator({ src, onSave, onCancel, saving }) {
     const baseScale = canvas.width / 400;
     ctx.strokeStyle = drawing.current.color;
     ctx.lineWidth = drawing.current.size * baseScale;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
     ctx.beginPath();
     ctx.moveTo(pts[pts.length - 2].x, pts[pts.length - 2].y);
     ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
@@ -1433,13 +1456,18 @@ function ImageAnnotator({ src, onSave, onCancel, saving }) {
   const save = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    canvas.toBlob((blob) => { if (blob) onSave(blob); else alert("Error al exportar la imagen"); }, "image/jpeg", 0.85);
+    try {
+      canvas.toBlob((blob) => {
+        if (blob) onSave(blob);
+        else alert("Error al exportar la imagen. Intenta de nuevo.");
+      }, "image/jpeg", 0.85);
+    } catch (e) {
+      alert("No se puede guardar la imagen anotada (problema de permisos CORS). Intenta cerrar y volver a abrir.");
+    }
   };
 
   return (
     <div className="ov-in" style={{ position: "fixed", inset: 0, zIndex: 10000, background: "#000", display: "flex", flexDirection: "column" }}>
-      {localSrc && <img ref={imgRef} src={localSrc} onLoad={onImgLoad} alt="" style={{ display: "none" }} />}
-
       <div style={{ padding: "max(12px, env(safe-area-inset-top, 0px)) 12px 8px", display: "flex", alignItems: "center", gap: 8 }}>
         <button onClick={onCancel} disabled={saving} style={{ padding: "8px 14px", borderRadius: 12, color: "#fff", background: "rgba(255,255,255,.15)", border: "none", fontSize: 13, fontWeight: 600 }}>Cancelar</button>
         <div style={{ flex: 1 }} />
@@ -1449,16 +1477,22 @@ function ImageAnnotator({ src, onSave, onCancel, saving }) {
         <button onClick={clear} disabled={!strokes.length || saving} style={{ width: 38, height: 38, borderRadius: 19, background: "rgba(255,255,255,.15)", border: "none", display: "flex", alignItems: "center", justifyContent: "center" }} title="Limpiar todo">
           <Ic d={P.trash} size={16} color={strokes.length ? "#fff" : "#666"} />
         </button>
-        <button onClick={save} disabled={saving} style={{ ...S.btnP, padding: "8px 18px" }}>{saving ? "..." : "Guardar"}</button>
+        <button onClick={save} disabled={saving || status !== "ready"} style={{ ...S.btnP, padding: "8px 18px", opacity: (saving || status !== "ready") ? 0.5 : 1 }}>{saving ? "..." : "Guardar"}</button>
       </div>
 
       <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", padding: 8 }}>
-        {!imgLoaded && <div style={{ color: "#fff", fontSize: 13 }}>Cargando imagen...</div>}
+        {status === "loading" && <div style={{ color: "#fff", fontSize: 13 }}>Cargando imagen...</div>}
+        {status === "error" && (
+          <div style={{ color: "#fff", textAlign: "center", padding: 20, fontSize: 13 }}>
+            <p>No se pudo cargar la imagen.</p>
+            <button onClick={onCancel} style={{ ...S.btnP, marginTop: 10 }}>Volver</button>
+          </div>
+        )}
         <canvas
           ref={canvasRef}
           onTouchStart={onStart} onTouchMove={onMove} onTouchEnd={onEnd} onTouchCancel={onEnd}
           onMouseDown={onStart} onMouseMove={(e) => drawing.current && onMove(e)} onMouseUp={onEnd} onMouseLeave={onEnd}
-          style={{ maxWidth: "100%", maxHeight: "100%", touchAction: "none", cursor: "crosshair", display: imgLoaded ? "block" : "none", background: "#1a1a1a" }}
+          style={{ maxWidth: "100%", maxHeight: "100%", touchAction: "none", cursor: "crosshair", display: status === "ready" ? "block" : "none", background: "#1a1a1a" }}
         />
       </div>
 
@@ -1538,7 +1572,7 @@ function ImagePicker({ notes, selected, onConfirm, onClose }) {
 /* ═══ PART (Work report) VIEW ═══ */
 function PartView({ proj, reports, notes, user, users, isA }) {
   const [show, setShow] = useState(false);
-  const [f, setF] = useState({ tasksDone: "", date: today(), hours: 8, workers: [user.uid], newImages: [], existingNoteIds: [] });
+  const [f, setF] = useState({ tasksDone: "", date: today(), hours: "8", workers: [user.uid], newImages: [], existingNoteIds: [] });
   const [picker, setPicker] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [annotIdx, setAnnotIdx] = useState(-1);
@@ -1592,17 +1626,33 @@ function PartView({ proj, reports, notes, user, users, isA }) {
     setAnnotIdx(-1);
   };
 
-  const toggleWorker = (uid2) => setF(prev => prev.workers.includes(uid2) ? { ...prev, workers: prev.workers.filter(x => x !== uid2) } : { ...prev, workers: [...prev.workers, uid2] });
+  const toggleWorker = (id) => setF(prev => prev.workers.includes(id) ? { ...prev, workers: prev.workers.filter(x => x !== id) } : { ...prev, workers: [...prev.workers, id] });
+
+  const validateHours = () => {
+    const n = parseFloat(String(f.hours).replace(",", "."));
+    if (!n || isNaN(n)) { setF(p => ({ ...p, hours: "8" })); return; }
+    if (n < 1) { setF(p => ({ ...p, hours: "1" })); return; }
+    if (n > 15) { setF(p => ({ ...p, hours: "15" })); return; }
+  };
 
   const create = async () => {
     if (!f.tasksDone.trim()) { alert("Describe las tareas realizadas"); return; }
     if (!f.workers.length) { alert("Selecciona al menos un trabajador"); return; }
+    const parsedHours = parseFloat(String(f.hours).replace(",", "."));
+    if (!parsedHours || isNaN(parsedHours) || parsedHours < 1 || parsedHours > 15) { alert("Las horas deben estar entre 1 y 15"); return; }
     setUploading(true);
     try {
-      const ref = await addToCollection("workReports", {
-        projectId: proj.id, userId: user.uid, userName: user.name,
-        date: f.date, tasksDone: f.tasksDone.trim(), hours: Number(f.hours), workers: f.workers,
-      });
+      // Defensive: filter undefined fields out
+      const reportData = {
+        projectId: proj.id || "",
+        userId: user.uid || "",
+        userName: user.name || user.email || "Usuario",
+        date: f.date || today(),
+        tasksDone: f.tasksDone.trim(),
+        hours: parsedHours,
+        workers: (f.workers || []).filter(Boolean),
+      };
+      const ref = await addToCollection("workReports", reportData);
       const reportId = ref.id;
 
       for (const img of f.newImages) {
@@ -1611,19 +1661,22 @@ function PartView({ proj, reports, notes, user, users, isA }) {
         await uploadBytes(sRef, img.file);
         const url = await getDownloadURL(sRef);
         await addToCollection("notes", {
-          projectId: proj.id, userId: user.uid, userName: user.name,
-          type: "image", content: url, noteText: img.comment || "",
+          projectId: proj.id,
+          userId: user.uid,
+          userName: user.name || user.email || "Usuario",
+          type: "image",
+          content: url,
+          noteText: img.comment || "",
           workReportId: reportId,
         });
       }
       for (const noteId of f.existingNoteIds) {
         await updateInCollection("notes", noteId, { workReportId: reportId });
       }
-      await addToCollection("notifications", { message: `${user.name} añadió un parte de trabajo en ${proj.name}`, projectId: proj.id, read: false });
+      await addToCollection("notifications", { message: `${user.name || "Alguien"} añadió un parte de trabajo en ${proj.name}`, projectId: proj.id, read: false });
 
-      // Cleanup blob URLs
       f.newImages.forEach(im => URL.revokeObjectURL(im.url));
-      setF({ tasksDone: "", date: today(), hours: 8, workers: [user.uid], newImages: [], existingNoteIds: [] });
+      setF({ tasksDone: "", date: today(), hours: "8", workers: [user.uid], newImages: [], existingNoteIds: [] });
       setShow(false);
     } catch (e) { alert("Error: " + e.message); }
     setUploading(false);
@@ -1644,8 +1697,8 @@ function PartView({ proj, reports, notes, user, users, isA }) {
     await deleteFromCollection("workReports", report.id);
   };
 
-  const userName = (id) => users.find(u => u.uid === id)?.name || "?";
-  const userColor = (id) => users.find(u => u.uid === id)?.color || "#ccc";
+  const userName = (id) => users.find(u => u.id === id)?.name || "?";
+  const userColor = (id) => users.find(u => u.id === id)?.color || "#ccc";
   const existingSelected = notes.filter(n => f.existingNoteIds.includes(n.id));
 
   return (
@@ -1675,7 +1728,18 @@ function PartView({ proj, reports, notes, user, users, isA }) {
             </div>
             <div style={{ width: 110 }}>
               <label style={{ fontSize: 11, color: "#999", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".5px", display: "block", marginBottom: 4 }}>Horas</label>
-              <input style={S.inp} type="number" min={1} max={15} step={0.5} value={f.hours} onChange={e => setF({ ...f, hours: Math.max(1, Math.min(15, Number(e.target.value) || 1)) })} />
+              <input
+                style={S.inp}
+                type="number"
+                inputMode="decimal"
+                min={1}
+                max={15}
+                step={0.5}
+                value={f.hours}
+                onChange={e => setF({ ...f, hours: e.target.value })}
+                onFocus={e => e.target.select()}
+                onBlur={validateHours}
+              />
             </div>
           </div>
 
@@ -1683,16 +1747,16 @@ function PartView({ proj, reports, notes, user, users, isA }) {
             <label style={{ fontSize: 11, color: "#999", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".5px", display: "block", marginBottom: 4 }}>Equipo trabajando</label>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {users.map(u => {
-                const on = f.workers.includes(u.uid);
+                const on = f.workers.includes(u.id);
                 return (
-                  <button key={u.uid} type="button" onClick={() => toggleWorker(u.uid)} style={{
+                  <button key={u.id} type="button" onClick={() => toggleWorker(u.id)} style={{
                     display: "flex", alignItems: "center", gap: 6,
                     padding: "6px 12px", borderRadius: 16, fontSize: 12, fontWeight: 600,
                     border: on ? "2px solid #E8853A" : "1px solid #ddd",
                     background: on ? "#FFF4EC" : "#fff", color: on ? "#E8853A" : "#666", cursor: "pointer"
                   }}>
                     <span style={{ width: 8, height: 8, borderRadius: "50%", background: u.color || "#ccc" }} />
-                    {u.name}
+                    {u.name || u.email || "?"}
                   </button>
                 );
               })}
@@ -1749,7 +1813,7 @@ function PartView({ proj, reports, notes, user, users, isA }) {
 
           <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
             <button style={S.btnP} onClick={create} disabled={uploading}>{uploading ? "Guardando..." : "Crear parte"}</button>
-            <button style={S.btnG} onClick={() => { f.newImages.forEach(im => URL.revokeObjectURL(im.url)); setF({ tasksDone: "", date: today(), hours: 8, workers: [user.uid], newImages: [], existingNoteIds: [] }); setShow(false); }} disabled={uploading}>Cancelar</button>
+            <button style={S.btnG} onClick={() => { f.newImages.forEach(im => URL.revokeObjectURL(im.url)); setF({ tasksDone: "", date: today(), hours: "8", workers: [user.uid], newImages: [], existingNoteIds: [] }); setShow(false); }} disabled={uploading}>Cancelar</button>
           </div>
         </div>
       )}
